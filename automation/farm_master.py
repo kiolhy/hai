@@ -52,11 +52,27 @@ def token(force=False):
     if force or not v or e-time.time()<120:
         if not refresh(): raise RuntimeError('auth')
     return TOK['v']
+_THEFTS=[]; _STEAL_LOG=[]
+def fetch_history(tok):
+    global _THEFTS,_STEAL_LOG
+    try:
+        st,lg,_=http('GET',ROOT+'/api/farm2d/farm/log?limit=30',token=tok)
+        if st==200 and isinstance(lg,dict) and lg.get('success'):
+            sl=[]
+            for row in lg['data'].get('log',[]):
+                if 'Steal' in str(row.get('action')):
+                    det=row.get('detail',{}) or {}
+                    sl.append({'ts':row.get('ts'),'action':row.get('action'),'stolen':len(det.get('steals',[]) or []),'blocked':len(det.get('blockedPlots',[]) or []),'skipped':len(det.get('skippedPlots',[]) or []),'stars':det.get('stars',0)})
+            _STEAL_LOG=sl[:12]
+        st2,tf,_=http('GET',ROOT+'/api/farm2d/farm/thefts?limit=30',token=tok)
+        if st2==200 and isinstance(tf,dict) and tf.get('success'):
+            _THEFTS=(tf.get('data',{}).get('thefts',[]) or [])[:20]
+    except Exception: pass
 def _live_dump(d):
     try:
         stt=d['state']; qv=stt.get('qqView',{}); s1=stt.get('stats',{}) or {}; sl=stt.get('steal',{}) or {}; pl=qv.get('plots',[])
         plots=[{'i':i,'cropId':p.get('cropId'),'mature':p.get('mature'),'remaining':p.get('remaining'),'stage':p.get('stageName'),'weed':p.get('weed'),'pest':p.get('pest'),'humidity':p.get('humidity')} for i,p in enumerate(pl)]
-        live={'ts':int(time.time()),'level':qv.get('level'),'levelProgress':qv.get('levelProgress'),'levelRequired':qv.get('levelRequired'),'stars':stt.get('stars'),'coins':stt.get('coins'),'steals_total':s1.get('steals'),'steal_today':sl.get('count'),'harvests':s1.get('harvests'),'planted':s1.get('planted'),'orders_done':s1.get('ordersDone'),'plots_count':len(pl),'mature_count':sum(1 for p in pl if p.get('mature')),'plots':plots,'orders':stt.get('orders',[]),'tasks':stt.get('fieldTasks')}
+        live={'ts':int(time.time()),'level':qv.get('level'),'levelProgress':qv.get('levelProgress'),'levelRequired':qv.get('levelRequired'),'stars':stt.get('stars'),'coins':stt.get('coins'),'steals_total':s1.get('steals'),'steal_today':sl.get('count'),'harvests':s1.get('harvests'),'planted':s1.get('planted'),'orders_done':s1.get('ordersDone'),'plots_count':len(pl),'mature_count':sum(1 for p in pl if p.get('mature')),'plots':plots,'orders':stt.get('orders',[]),'tasks':stt.get('fieldTasks'),'thefts':_THEFTS,'steal_log':_STEAL_LOG}
         open(os.path.join(OUT,'farm_live.json'),'w',encoding='utf-8').write(json.dumps(live,ensure_ascii=False))
     except Exception: pass
 def getstate():
@@ -116,14 +132,11 @@ def farm_pass():
     act('sellAll',{})
     act('plantAll',{'cropId':59,'buyMissing':True,'confirm':True},'wrap')
     act('claimAll',{},'direct'); act('claimAllAchv',{},'direct'); act('claimFieldTasks',{},'direct')
+    try: fetch_history(token())
+    except Exception: pass
     dd=getstate()
     if dd:
         qv=dd['state']['qqView']; log(f'[farm] lvl={qv["level"]} lp={qv["levelProgress"]}/{qv["levelRequired"]} stars={dd["state"]["stars"]} coins={dd["state"]["coins"]} plots={[(i,p.get("cropId"),p.get("mature"),p.get("remaining")) for i,p in enumerate(qv["plots"])]}')
-        try:
-            _st=dd['state'].get('stats',{}) or {}; _sl=dd['state'].get('steal',{}) or {}; _pl=qv.get('plots',[])
-            _live={'ts':int(time.time()),'level':qv.get('level'),'levelProgress':qv.get('levelProgress'),'levelRequired':qv.get('levelRequired'),'stars':dd['state'].get('stars'),'coins':dd['state'].get('coins'),'steals_total':_st.get('steals'),'steal_today':_sl.get('count'),'harvests':_st.get('harvests'),'planted':_st.get('planted'),'orders_done':_st.get('ordersDone'),'plots_count':len(_pl),'mature_count':sum(1 for p in _pl if p.get('mature'))}
-            open(os.path.join(OUT,'farm_live.json'),'w',encoding='utf-8').write(json.dumps(_live,ensure_ascii=False))
-        except Exception: pass
 def steal_neighbors():
     st,nb,_=http('GET',ROOT+'/api/farm2d/farm/neighbors',token=token())
     tg=[]

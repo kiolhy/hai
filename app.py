@@ -364,7 +364,7 @@ def api_live_stream():
     return Response(gen(), mimetype='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 # ---------------- farm collection ----------------
-STATUS = {'last_collect': 0, 'last_error': '', 'logged_in': False, 'started': time.time(), 'collects': 0}
+STATUS = {'last_collect': 0, 'last_error': '', 'logged_in': False, 'started': time.time(), 'collects': 0, 'source': ''}
 _S = requests.Session()
 _S.headers.update({'User-Agent': 'hai/2.0', 'Accept': 'application/json', 'Content-Type': 'application/json', 'Origin': BASE})
 _LOCK = threading.Lock()
@@ -440,9 +440,12 @@ def collect_from_live_file():
     if time.time() - os.path.getmtime(p) > 900: return False
     live = json.load(open(p, encoding='utf-8'))
     c = db()
-    last = c.execute("SELECT ts,level,levelProgress,stars,coins,steals_total,steal_today FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+    last = c.execute("SELECT ts,level,levelProgress,stars,coins,steals_total,steal_today,payload FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
     cur = (live.get('level'), live.get('levelProgress'), live.get('stars'), live.get('coins'), live.get('steals_total'), live.get('steal_today'))
     changed = (not last) or (tuple(last[1:7]) != cur)
+    try:
+        if last and last[7] and 'plots' not in json.loads(last[7]): changed = True
+    except Exception: changed = True
     stale = (not last) or (time.time() - last[0] >= RETAIN_UNCHANGED)
     if changed or stale:
         payload = {'source': 'farm_live', 'live': live}
@@ -459,7 +462,7 @@ def collect_from_live_file():
         c.execute("DELETE FROM snapshots WHERE ts < ?", (int(time.time()) - SNAP_DAYS * 86400,))
     except Exception: pass
     c.commit(); c.close()
-    STATUS['last_collect'] = int(time.time()); STATUS['last_error'] = '数据源: farm_master 文件桥接'; STATUS['collects'] += 1
+    STATUS['last_collect'] = int(time.time()); STATUS['source'] = 'farm_master 文件桥接'; STATUS['last_error'] = ''; STATUS['collects'] += 1
     return True
 
 def collector_loop():
@@ -473,7 +476,7 @@ def collector_loop():
         sel = get_setting('resident_script', '')
         busy = bool(sel and (_proc_running(sel) or _external_running(sel)))
         if busy:
-            STATUS['last_error'] = '常驻脚本运行中，跳过登录采集(用文件桥接)'
+            STATUS['source'] = '常驻脚本运行中(文件桥接)'; STATUS['last_error'] = ''
         else:
             for attempt in range(3):
                 try:

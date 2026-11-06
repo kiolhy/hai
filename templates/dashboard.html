@@ -63,7 +63,7 @@ let charts={};
 function mkline(id,ds,y1){return new Chart(document.getElementById(id),{type:'line',data:{labels:[],datasets:ds},options:{plugins:{legend:{labels:{color:'#8b949e',boxWidth:10}}},scales:{x:{ticks:{color:'#8b949e',maxTicksLimit:8},grid:{color:'#21262d'}},y:{ticks:{color:'#8b949e'},grid:{color:'#21262d'}},y1:{position:'right',ticks:{color:'#d29922'},grid:{drawOnChartArea:false}}},animation:false}})}
 async function load(){
   const cfg=await J('/api/status'); document.getElementById('cfg').textContent=`base=${cfg.config.base} · 间隔${cfg.config.interval}s · 采集${cfg.status.collects}次 · ${cfg.config.has_farm_creds?'凭据已配':'凭据未配'}`;
-  document.getElementById('status').innerHTML=`<span class="${cfg.status.last_error?'err':'ok'}">采集器:${cfg.status.last_error?('错误 '+cfg.status.last_error):'正常'}</span>`;
+  document.getElementById('status').innerHTML=`<span class="${cfg.status.last_error?'err':'ok'}">采集器:${cfg.status.last_error?('错误 '+cfg.status.last_error):('正常 · '+(cfg.status.source||'实时'))}</span>`;
   const l=await J('/api/latest');
   if(l.ok){const d=l.data,p=d.payload||{};
     document.getElementById('lv').textContent=(d.level??'-')+' / '+(d.levelProgress??'-');
