@@ -2,7 +2,7 @@
 <meta name="csrf" content="{{ csrf_token() }}">
 <title>hai · 后台管理</title>
 <style>body{margin:0;background:#0d1117;color:#e6edf3;font-family:system-ui,"Microsoft YaHei",sans-serif}header{padding:14px 22px;border-bottom:1px solid #21262d;display:flex;gap:14px;align-items:center}header a{color:#58a6ff;text-decoration:none;font-size:14px}.wrap{padding:20px 22px;display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:1000px}@media(max-width:800px){.wrap{grid-template-columns:1fr}}.panel{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px 18px}h2{font-size:14px;margin:0 0 12px}label{display:block;font-size:12px;color:#8b949e;margin:8px 0 4px}input{width:100%;box-sizing:border-box;padding:9px 11px;border-radius:8px;border:1px solid #30363d;background:#0d1117;color:#e6edf3}button{margin-top:12px;padding:9px 14px;border:0;border-radius:8px;background:#238636;color:#fff;font-weight:600;cursor:pointer}.mut{color:#8b949e;font-size:12px}.ok{color:#3fb950}.err{color:#f85149}</style></head>
-<body><header><strong>🌾 hai 后台</strong><a href="/">← 返回看板</a><form method="post" action="/logout" style="margin-left:auto"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button style="background:#30363d;padding:6px 10px;margin:0">退出</button></form></header>
+<body><header><strong>🌾 hai 后台</strong><a href="/">← 返回看板</a><a href="/scripts">📜 脚本监控</a><form method="post" action="/logout" style="margin-left:auto"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button style="background:#30363d;padding:6px 10px;margin:0">退出</button></form></header>
 <div class="wrap">
   <div class="panel"><h2>🔑 修改访问密码</h2>
     <form id="pwf"><label>旧密码</label><input type="{{ ptype }}" name="old" required>

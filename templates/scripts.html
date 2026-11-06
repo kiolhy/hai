@@ -1,0 +1,31 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf" content="{{ csrf_token() }}">
+<title>hai · 脚本监控</title>
+<style>body{margin:0;background:#0d1117;color:#e6edf3;font-family:system-ui,"Microsoft YaHei",sans-serif}header{padding:14px 22px;border-bottom:1px solid #21262d;display:flex;gap:14px;align-items:center}header a,header .lnk{color:#58a6ff;text-decoration:none;font-size:13px;cursor:pointer}header h1{font-size:16px;margin:0}.wrap{padding:16px 22px}.mut{color:#8b949e;font-size:12px}.ok{color:#3fb950}.err{color:#f85149}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #21262d;padding:7px;text-align:left;vertical-align:top}pre{margin:4px 0 0;max-height:120px;overflow:auto;background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:6px;color:#8b949e;font-size:11px;white-space:pre-wrap}button{padding:4px 9px;border:0;border-radius:6px;cursor:pointer;font-size:12px}.st{background:#238636;color:#fff}.sp{background:#30363d;color:#fff}.run{color:#3fb950}.idle{color:#8b949e}</style></head>
+<body><header><h1>📜 脚本监控</h1><a href="/">← 看板</a><a href="/admin">⚙ 后台</a>
+<form method="post" action="/logout" style="margin-left:auto"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="lnk" style="background:none;border:0;color:#58a6ff">退出</button></form></header>
+<div class="wrap">
+ <div class="mut" id="hint">自动每 5s 刷新。运行状态：本服务启动的进程按 PID；外部进程按日志 3 分钟内有更新判定。点“启动/停止”可托管。</div>
+ <div class="mut" id="ldir" style="margin:6px 0"></div>
+ <table><thead><tr><th style="width:170px">脚本</th><th style="width:90px">状态</th><th style="width:140px">日志/更新</th><th>最近日志</th><th style="width:120px">操作</th></tr></thead><tbody id="tb"></tbody></table>
+</div>
+<script>
+const CSRF=document.querySelector('meta[name=csrf]').content;
+async function ctl(op,name){const fd=new FormData();fd.set('csrf',CSRF);const r=await fetch('/admin/script/'+op+'/'+name,{method:'POST',body:fd,headers:{'X-CSRF':CSRF}});const j=await r.json().catch(()=>({ok:false,error:'HTTP '+r.status}));alert((j.ok?'OK: ':'失败: ')+(j.msg||j.error||''));load()}
+async function load(){
+  const j=await (await fetch('/api/scripts')).json();
+  document.getElementById('ldir').textContent='日志目录: '+(j.log_dir||'');
+  const tb=document.getElementById('tb'); tb.innerHTML='';
+  (j.scripts||[]).forEach(s=>{
+    const tr=document.createElement('tr');
+    const st=s.running?'<span class="run">● 运行中</span>':'<span class="idle">○ 空闲</span>';
+    const age=s.log_age!=null?(s.log_age+'s前'):'无日志';
+    tr.innerHTML=`<td><b>${s.name}</b><div class="mut">${s.managed?'本服务托管':'外部/未托管'}</div></td>
+      <td>${st}</td><td>${s.log||'-'}<div class="mut">${age}</div></td>
+      <td><pre>${(s.tail||[]).map(x=>x.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))).join('\n')||'（无）'}</pre></td>
+      <td><button class="st" onclick="ctl('start','${s.name}')">启动</button> <button class="sp" onclick="ctl('stop','${s.name}')">停止</button></td>`;
+    tb.appendChild(tr);
+  });
+}
+load();setInterval(load,5000);
+</script></body></html>

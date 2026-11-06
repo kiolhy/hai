@@ -4,7 +4,7 @@
 hai v2 — 鉴权 + 网页配置 + 全量数据看板
 安全: PBKDF2 访问密码 / 签名会话 / CSRF / 登录限流 / 农场凭据 Fernet 加密 / 生产 Cookie Secure
 """
-import os, json, time, sqlite3, threading, secrets, functools
+import os, json, time, sqlite3, threading, secrets, functools, subprocess, sys, glob, re
 import requests
 from flask import (Flask, request, session, redirect, url_for, jsonify,
                    render_template, abort)
@@ -206,6 +206,59 @@ def api_history():
 def api_status():
     return jsonify(ok=True, config={'base': BASE, 'interval': INTERVAL, 'has_farm_creds': bool(get_farm_creds())},
                    status=STATUS, uptime=int(time.time() - STATUS['started']))
+
+# ---------------- automation scripts monitor ----------------
+SCRIPTS_DIR = os.path.join(HERE, 'automation')
+SCRIPTS_LOG_DIR = os.environ.get('SCRIPTS_LOG_DIR', os.path.join(HERE, 'logs'))
+os.makedirs(SCRIPTS_DIR, exist_ok=True); os.makedirs(SCRIPTS_LOG_DIR, exist_ok=True)
+RUNNING = {}
+
+def _log_for(stem):
+    cands = glob.glob(os.path.join(SCRIPTS_LOG_DIR, '**', '*%s*.log' % stem), recursive=True)
+    return max(cands, key=os.path.getmtime) if cands else None
+
+def scripts_snapshot():
+    out = []
+    for f in sorted(glob.glob(os.path.join(SCRIPTS_DIR, '*.py'))):
+        stem = os.path.splitext(os.path.basename(f))[0]
+        p = RUNNING.get(stem); managed = p is not None; running = managed and p.poll() is None
+        log = _log_for(stem); lm = os.path.getmtime(log) if log else 0
+        if not running and log and time.time() - lm < 180: running = True
+        tail = []
+        if log:
+            try: tail = open(log, encoding='utf-8', errors='replace').read().splitlines()[-15:]
+            except Exception: pass
+        out.append({'name': stem, 'running': running, 'managed': managed,
+                    'log': os.path.basename(log) if log else None,
+                    'log_age': int(time.time() - lm) if lm else None, 'tail': tail})
+    return out
+
+@app.route('/api/scripts')
+@login_required
+def api_scripts(): return jsonify(ok=True, scripts=scripts_snapshot(), log_dir=SCRIPTS_LOG_DIR)
+
+@app.route('/scripts')
+@login_required
+def scripts_page(): return render_template('scripts.html')
+
+@app.route('/admin/script/<op>/<name>', methods=['POST'])
+@login_required
+def admin_script(op, name):
+    check_csrf()
+    if not re.match(r'^[A-Za-z0-9_]+$', name): abort(400)
+    path = os.path.join(SCRIPTS_DIR, name + '.py')
+    if not os.path.exists(path): return jsonify(ok=False, error='脚本不存在'), 404
+    if op == 'stop':
+        p = RUNNING.get(name)
+        if p and p.poll() is None: p.terminate(); return jsonify(ok=True, msg='已停止')
+        return jsonify(ok=True, msg='非本服务托管/未在运行')
+    if op == 'start':
+        if RUNNING.get(name) and RUNNING[name].poll() is None: return jsonify(ok=True, msg='已在运行')
+        log = _log_for(name) or os.path.join(SCRIPTS_LOG_DIR, name + '.log')
+        fh = open(log, 'a', encoding='utf-8')
+        RUNNING[name] = subprocess.Popen([sys.executable, '-u', path], cwd=SCRIPTS_DIR, stdout=fh, stderr=subprocess.STDOUT)
+        return jsonify(ok=True, msg='已启动 pid %d' % RUNNING[name].pid)
+    abort(404)
 
 # ---------------- farm collection ----------------
 STATUS = {'last_collect': 0, 'last_error': '', 'logged_in': False, 'started': time.time(), 'collects': 0}
