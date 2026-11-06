@@ -75,8 +75,8 @@ def new_source_key(uid):
 def main():
     global ROOT, COOKIE_FILE
     ap = argparse.ArgumentParser()
-    ap.add_argument('--root', required=True)
-    ap.add_argument('--cookie-file', required=True)
+    ap.add_argument('--root', default=os.environ.get('FARM_ROOT', 'https://www.0809.one'))
+    ap.add_argument('--cookie-file', default=os.environ.get('FARM_COOKIE_FILE', r'D:\project\偷菜\_recon\mycookie_lllliii.txt'))
     ap.add_argument('--stars', type=int, default=1, help='兑换档位(1/5/10/25)')
     ap.add_argument('--quota', type=int, default=0, help='直接指定 quota(需在 allowedQuotas 内)')
     ap.add_argument('--dry-run', action='store_true')

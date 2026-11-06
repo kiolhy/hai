@@ -74,8 +74,8 @@ def steal(targets, version):
 def main():
     global ROOT, COOKIE_FILE
     ap = argparse.ArgumentParser()
-    ap.add_argument('--root', required=True)
-    ap.add_argument('--cookie-file', required=True)
+    ap.add_argument('--root', default=os.environ.get('FARM_ROOT', 'https://www.0809.one'))
+    ap.add_argument('--cookie-file', default=os.environ.get('FARM_COOKIE_FILE', r'D:\project\偷菜\_recon\mycookie_lllliii.txt'))
     ap.add_argument('--target', type=int, default=200)
     ap.add_argument('--duration', type=int, default=1200, help='本轮运行秒数')
     ap.add_argument('--poll', type=int, default=40, help='无邻居时轮询间隔秒')

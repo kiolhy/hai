@@ -108,7 +108,7 @@ class Api:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", required=True, help="例如 https://www.example.com/api/farm2d")
+    ap.add_argument("--base", default=os.environ.get("FARM_BASE_API", "https://www.0809.one/api/farm2d"), help="例如 https://www.example.com/api/farm2d")
     ap.add_argument("--token", default=os.environ.get("FARM_TOKEN", ""), help="Bearer access token")
     ap.add_argument("--cookie", default=os.environ.get("FARM_REFRESH_COOKIE", ""), help="new_api_refresh cookie 值")
     ap.add_argument("--dry-run", action="store_true", help="只读, 不提交偷菜")

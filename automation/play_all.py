@@ -55,7 +55,9 @@ def act(name,params,kind='wrap',tag=''):
         print(f'  [X] [{tag}{name}] {json.dumps(params,ensure_ascii=False)[:50]} -> {str(msg)[:70]}'); return False
     return False
 if not refresh(): raise SystemExit
-dd=getstate(); S=dd['state']; qv=S['qqView']
+dd=getstate()
+if not dd: print('no state (upstream?)'); raise SystemExit(1)
+S=dd['state']; qv=S['qqView']
 print('START level',qv['level'],'lp',qv['levelProgress'],'/',qv['levelRequired'],'stars',S['stars'],'coins',S['coins'])
 print('== 每日/领取 玩法 ==')
 act('checkIn',{},'direct','签到 ')
@@ -102,5 +104,7 @@ act('buildWorkshop',{'workshop':'bakery'},'wrap','建面包坊 ')
 act('claimProduction',{'workshop':'bakery'},'wrap','领成品 ')
 print('== 资源/蜂房加工 ==')
 act('compost',{'quantity':5},'wrap','花粉制肥 ')
-dd=getstate(); S=dd['state']; qv=S['qqView']
+dd=getstate()
+if not dd: print('no state (upstream?)'); raise SystemExit(1)
+S=dd['state']; qv=S['qqView']
 print('END level',qv['level'],'lp',qv['levelProgress'],'/',qv['levelRequired'],'stars',S['stars'],'coins',S['coins'],'fert',json.dumps(qv.get('fertilizers'),ensure_ascii=False))

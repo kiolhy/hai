@@ -186,7 +186,7 @@ def healthz(): return 'ok'
 def api_upstream():
     try:
         r = requests.get(BASE + '/api/farm2d/farm/catalog', timeout=10)
-        return jsonify(ok=True, status=r.status_code, up=(r.status_code == 200))
+        return jsonify(ok=True, status=r.status_code, up=(r.status_code in (200, 401)))
     except Exception as e:
         return jsonify(ok=True, status=0, up=False, error=str(e)[:120])
 
