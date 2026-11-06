@@ -109,14 +109,13 @@ for f in glob.glob(os.path.join(OUT,'scan*.json')):
 SCAN_IDS=[i for i in range(1,2901) if i not in GONE and i!=ME]
 CUR=[0]
 def spend():
-    # 每日金币化肥(限6)+小麦包
+    # 每日金币化肥(限6)。注意: village 补给包(小麦650→10麦≈96币)是亏本，勿买。
     bought=0
     for i in range(6):
         ok,msg=act('marketBuy',{'offer':'fertilizer'},'wrap')
         if ok: bought+=1
         else: break
-    okw,_=act('marketBuy',{'offer':'wheat'},'wrap')
-    log(f'[spend] 金币化肥x{bought} 小麦包={okw}')
+    log(f'[spend] 金币化肥x{bought} (不买补给包:亏本)')
 def use_fert(dd):
     qv=dd['state']['qqView']
     for i,p in enumerate(qv['plots']):
