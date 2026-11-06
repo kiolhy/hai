@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>hai · 百川农场数据看板</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#21262d;--fg:#e6edf3;--mut:#8b949e;--accent:#2ea043;--gold:#d29922;--gem:#58a6ff}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
+header{padding:16px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+header h1{font-size:18px;margin:0}header .tag{color:var(--mut);font-size:12px}
+.wrap{padding:18px 22px;display:flex;flex-direction:column;gap:16px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.card .k{color:var(--mut);font-size:12px}.card .v{font-size:24px;font-weight:700;margin-top:4px}
+.v.stars{color:var(--gem)}.v.coins{color:var(--gold)}.v.lvl{color:var(--accent)}
+.grid2{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.panel h2{font-size:14px;margin:0 0 10px;color:var(--fg)}
+.plots{display:grid;grid-template-columns:repeat(auto-fill,minmax(70px,1fr));gap:8px}
+.plot{background:#0d1117;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;text-align:center}
+.plot .cid{font-weight:700;color:var(--gem)}.plot.mature{outline:1px solid var(--accent)}.plot.empty{opacity:.5}
+.mut{color:var(--mut);font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:12px}td,th{border-bottom:1px solid var(--line);padding:6px;text-align:left}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#1f6feb33;color:#58a6ff;border:1px solid #1f6feb55}
+.err{color:#f85149}.ok{color:#3fb950}
+</style>
+</head>
+<body>
+<header><h1>🌾 hai · 百川农场数据看板</h1><span class="tag" id="cfg">加载中…</span></header>
+<div class="wrap">
+  <div class="cards">
+    <div class="card"><div class="k">等级</div><div class="v lvl" id="level">-</div></div>
+    <div class="card"><div class="k">经验进度</div><div class="v" id="xp">-</div></div>
+    <div class="card"><div class="k">钻石</div><div class="v stars" id="stars">-</div></div>
+    <div class="card"><div class="k">金币</div><div class="v coins" id="coins">-</div></div>
+    <div class="card"><div class="k">邻居 / 可偷地块</div><div class="v" id="neigh">-</div></div>
+    <div class="card"><div class="k">采集时间</div><div class="v" id="ts" style="font-size:14px">-</div></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h2>钻石 / 金币 历史</h2><canvas id="hist" height="140"></canvas></div>
+    <div class="panel"><h2>地块状态</h2><div class="plots" id="plots"></div><div class="mut" id="plotnote"></div></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h2>订单 / 委托</h2><table id="orders"><tbody></tbody></table></div>
+    <div class="panel"><h2>丰收任务 & 状态</h2><div id="tasks" class="mut"></div><div id="status" class="mut" style="margin-top:8px"></div></div>
+  </div>
+</div>
+<script>
+let chart;
+async function j(u,o){const r=await fetch(u,o);return r.json()}
+function esc(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+async function load(){
+  const cfg=(await j('/api/status')); document.getElementById('cfg').textContent =
+     `base=${cfg.config.base} · creds=${cfg.config.has_creds?'已配置':'未配置'} · 间隔${cfg.config.interval}s · 采集次数${cfg.status.collects}`;
+  const s=cfg.status; document.getElementById('status').innerHTML =
+     `<span class="${s.last_error?'err':'ok'}">采集器: ${s.last_error?('错误 '+esc(s.last_error)):'正常'}</span> · 登录=${s.logged_in} · 运行${cfg.uptime}s`;
+  const l=await j('/api/latest');
+  if(!l.ok){document.getElementById('plotnote').textContent=l.message||'暂无数据';}
+  else{const d=l.data;
+    document.getElementById('level').textContent=d.level??'-';
+    document.getElementById('xp').textContent=(d.levelProgress??'-')+' / '+(d.levelRequired??'-');
+    document.getElementById('stars').textContent=d.stars??'-';
+    document.getElementById('coins').textContent=d.coins??'-';
+    document.getElementById('neigh').textContent=(d.neighbors??'-')+' / '+(d.qq_neighbors??'-');
+    document.getElementById('ts').textContent=new Date(d.ts*1000).toLocaleString();
+    const pl=document.getElementById('plots'); pl.innerHTML='';
+    (d.plots_json||[]).forEach((p,i)=>{const div=document.createElement('div');
+      div.className='plot '+(p.mature?'mature':'')+(!p.cropId?' empty':'');
+      div.innerHTML=`<div class="mut">#${i}</div><div class="cid">${p.cropId??'-'}</div><div class="mut">${p.mature?'成熟':(p.remaining?Math.round(p.remaining/60)+'m':'空')}</div>`;
+      pl.appendChild(div);});
+    const tb=document.querySelector('#orders tbody'); tb.innerHTML='';
+    (d.orders_json||[]).forEach(o=>{const tr=document.createElement('tr');
+      tr.innerHTML=`<td>#${o.id}</td><td>${(o.demands||[]).map(x=>esc(x.crop)+'×'+x.qty).join(', ')}</td><td>金币${o.coins??''}</td><td>经验+${o.xp??0} 星+${o.stars??0}</td>`;
+      tb.appendChild(tr);});
+    if(!(d.orders_json||[]).length) tb.innerHTML='<tr><td class="mut">暂无订单</td></tr>';
+    const t=d.tasks_json||{}; document.getElementById('tasks').innerHTML =
+      `进度: ${JSON.stringify(t.progress||{})}<br>要求: ${JSON.stringify(t.requirements||{})}<br>奖励: ${t.reward??''} · 可领=${t.available}`;
+  }
+  const h=await j('/api/history?limit=300');
+  const labels=h.items.map(x=>new Date(x.ts*1000).toLocaleTimeString());
+  const ds=[{label:'钻石',data:h.items.map(x=>x.stars),borderColor:'#58a6ff',tension:.25,pointRadius:0},
+            {label:'金币',data:h.items.map(x=>x.coins),borderColor:'#d29922',tension:.25,pointRadius:0,yAxisID:'y1'}];
+  if(!chart){chart=new Chart(document.getElementById('hist'),{type:'line',data:{labels,datasets:ds},options:{plugins:{legend:{labels:{color:'#8b949e'}}},scales:{x:{ticks:{color:'#8b949e',maxTicksLimit:8},grid:{color:'#21262d'}},y:{ticks:{color:'#58a6ff'},grid:{color:'#21262d'}},y1:{position:'right',ticks:{color:'#d29922'},grid:{drawOnChartArea:false}}}}});}
+  else{chart.data.labels=labels;chart.data.datasets=ds;chart.update();}
+}
+load(); setInterval(load,30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+services:
+  hai:
+    build: .
+    container_name: hai-dashboard
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - FARM_BASE=${FARM_BASE:-https://www.0809.one}
+      - FARM_USERNAME=${FARM_USERNAME:-}
+      - FARM_PASSWORD=${FARM_PASSWORD:-}
+      - COLLECT_INTERVAL=${COLLECT_INTERVAL:-300}
+      - DB_PATH=/app/data/history.db
+    volumes:
+      - ./data:/app/data
