@@ -8,3 +8,5 @@ data/*.db-*
 data/
 data_test/
 *.key
+data_t*/
+data_t*
