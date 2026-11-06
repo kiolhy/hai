@@ -216,11 +216,14 @@ def ws_listener():
             while True:
                 m=json.loads(await asyncio.wait_for(ws.recv(),timeout=90));_ws_on_frame(m)
     def run():
+        attempt=0
         while True:
-            try:asyncio.run(one())
+            try:
+                asyncio.run(one()); attempt=0
             except Exception as e:
                 with WSLOCK:WS['connected']=False
-                log('[ws] err '+str(e)[:80]);time.sleep(8)
+                attempt=min(attempt+1,6); d=min(60,5*(2**attempt))
+                log('[ws] err '+str(e)[:70]+(' | retry %ds'%d));time.sleep(d)
     threading.Thread(target=run,daemon=True).start()
 def main(duration=7200):
     open(LOG,'w',encoding='utf-8').close()

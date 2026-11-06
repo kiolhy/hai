@@ -64,6 +64,7 @@ function mkline(id,ds,y1){return new Chart(document.getElementById(id),{type:'li
 async function load(){
   const cfg=await J('/api/status'); document.getElementById('cfg').textContent=`base=${cfg.config.base} · 间隔${cfg.config.interval}s · 采集${cfg.status.collects}次 · ${cfg.config.has_farm_creds?'凭据已配':'凭据未配'}`;
   document.getElementById('status').innerHTML=`<span class="${cfg.status.last_error?'err':'ok'}">采集器:${cfg.status.last_error?('错误 '+cfg.status.last_error):('正常 · '+(cfg.status.source||'实时'))}</span>`;
+  try{const up=await (await fetch('/api/upstream')).json();document.getElementById('status').innerHTML+=` · 上游farm2d:<span class="${up.up?'ok':'err'}">${up.status||'ERR'}</span>`;}catch(e){}
   const l=await J('/api/latest');
   if(l.ok){const d=l.data,p=d.payload||{};
     document.getElementById('lv').textContent=(d.level??'-')+' / '+(d.levelProgress??'-');
