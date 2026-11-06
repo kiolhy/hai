@@ -1,16 +1,22 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="csrf" content="{{ csrf_token() }}">
 <title>hai · 脚本监控</title>
-<style>body{margin:0;background:#0d1117;color:#e6edf3;font-family:system-ui,"Microsoft YaHei",sans-serif}header{padding:14px 22px;border-bottom:1px solid #21262d;display:flex;gap:14px;align-items:center}header a,header .lnk{color:#58a6ff;text-decoration:none;font-size:13px;cursor:pointer}header h1{font-size:16px;margin:0}.wrap{padding:16px 22px}.mut{color:#8b949e;font-size:12px}.ok{color:#3fb950}.err{color:#f85149}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #21262d;padding:7px;text-align:left;vertical-align:top}pre{margin:4px 0 0;max-height:120px;overflow:auto;background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:6px;color:#8b949e;font-size:11px;white-space:pre-wrap}button{padding:4px 9px;border:0;border-radius:6px;cursor:pointer;font-size:12px}.st{background:#238636;color:#fff}.sp{background:#30363d;color:#fff}.run{color:#3fb950}.idle{color:#8b949e}</style></head>
+<style>body{margin:0;background:#0d1117;color:#e6edf3;font-family:system-ui,"Microsoft YaHei",sans-serif}header{padding:14px 22px;border-bottom:1px solid #21262d;display:flex;gap:14px;align-items:center}header a,header .lnk{color:#58a6ff;text-decoration:none;font-size:13px;cursor:pointer}header h1{font-size:16px;margin:0}.wrap{padding:16px 22px}.mut{color:#8b949e;font-size:12px}.ok{color:#3fb950}.err{color:#f85149}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #21262d;padding:7px;text-align:left;vertical-align:top}pre{margin:4px 0 0;max-height:110px;overflow:auto;background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:6px;color:#8b949e;font-size:11px;white-space:pre-wrap}button{padding:4px 9px;border:0;border-radius:6px;cursor:pointer;font-size:12px}.st{background:#238636;color:#fff}.sp{background:#30363d;color:#fff}.run{color:#3fb950}.idle{color:#8b949e}.warn{color:#f85149;font-weight:700}.banner{background:#161b22;border:1px solid #21262d;border-left:3px solid #1f6feb;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#c9d1d9;line-height:1.7}.tag{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px}.t-daemon{background:#1f6feb33;color:#58a6ff;border:1px solid #1f6feb55}.t-tool{background:#30363d;color:#c9d1d9}.t-legacy{background:#21262d;color:#6e7681}</style></head>
 <body><header><h1>📜 脚本监控</h1><a href="/">← 看板</a><a href="/admin">⚙ 后台</a>
 <form method="post" action="/logout" style="margin-left:auto"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="lnk" style="background:none;border:0;color:#58a6ff">退出</button></form></header>
 <div class="wrap">
- <div class="mut" id="hint">自动每 5s 刷新。运行状态：本服务启动的进程按 PID；外部进程按日志 3 分钟内有更新判定。点“启动/停止”可托管。</div>
- <div class="mut" id="ldir" style="margin:6px 0"></div>
- <table><thead><tr><th style="width:170px">脚本</th><th style="width:90px">状态</th><th style="width:140px">日志/更新</th><th>最近日志</th><th style="width:120px">操作</th></tr></thead><tbody id="tb"></tbody></table>
+ <div class="banner">
+   <b>关于“空闲”</b>：空闲 = 该脚本当前未运行，属正常。<br>
+   · <span class="tag t-daemon">常驻</span> 应保持运行（当前应只有 <b>farm_master</b> 常驻；<b>常驻却显示空闲会红字告警</b>）。<br>
+   · <span class="tag t-tool">工具</span> 一次性脚本（手动点“启动”跑一次即可）。 <span class="tag t-legacy">旧版</span> 历史版本，已被 farm_master 取代，无需再跑。<br>
+   · <b>不要同时开多个</b>：同账号并发会触发 `AUTH_SESSION_LIMIT` / 请求限频，正是我们已修复的问题，所以只让 farm_master 常驻。
+ </div>
+ <div class="mut" id="ldir"></div>
+ <table><thead><tr><th style="width:230px">脚本</th><th style="width:70px">类型</th><th style="width:110px">状态</th><th style="width:130px">日志/更新</th><th>最近日志</th><th style="width:120px">操作</th></tr></thead><tbody id="tb"></tbody></table>
 </div>
 <script>
 const CSRF=document.querySelector('meta[name=csrf]').content;
+const TN={daemon:'常驻',tool:'工具',legacy:'旧版'};
 async function ctl(op,name){const fd=new FormData();fd.set('csrf',CSRF);const r=await fetch('/admin/script/'+op+'/'+name,{method:'POST',body:fd,headers:{'X-CSRF':CSRF}});const j=await r.json().catch(()=>({ok:false,error:'HTTP '+r.status}));alert((j.ok?'OK: ':'失败: ')+(j.msg||j.error||''));load()}
 async function load(){
   const j=await (await fetch('/api/scripts')).json();
@@ -18,9 +24,14 @@ async function load(){
   const tb=document.getElementById('tb'); tb.innerHTML='';
   (j.scripts||[]).forEach(s=>{
     const tr=document.createElement('tr');
-    const st=s.running?'<span class="run">● 运行中</span>':'<span class="idle">○ 空闲</span>';
+    const mode=s.mode||'tool';
+    let st;
+    if(s.running) st='<span class="run">● 运行中</span>';
+    else if(mode==='daemon') st='<span class="warn">⚠ 空闲(应运行)</span>';
+    else st='<span class="idle">○ 空闲</span>';
     const age=s.log_age!=null?(s.log_age+'s前'):'无日志';
-    tr.innerHTML=`<td><b>${s.name}</b><div class="mut">${s.managed?'本服务托管':'外部/未托管'}</div></td>
+    tr.innerHTML=`<td><b>${s.name}</b> <span class="tag t-${mode}">${TN[mode]||mode}</span><div class="mut">${s.desc||''}</div></td>
+      <td><span class="tag t-${mode}">${TN[mode]||mode}</span></td>
       <td>${st}</td><td>${s.log||'-'}<div class="mut">${age}</div></td>
       <td><pre>${(s.tail||[]).map(x=>x.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))).join('\n')||'（无）'}</pre></td>
       <td><button class="st" onclick="ctl('start','${s.name}')">启动</button> <button class="sp" onclick="ctl('stop','${s.name}')">停止</button></td>`;

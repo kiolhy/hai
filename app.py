@@ -217,7 +217,13 @@ def _log_for(stem):
     cands = glob.glob(os.path.join(SCRIPTS_LOG_DIR, '**', '*%s*.log' % stem), recursive=True)
     return max(cands, key=os.path.getmtime) if cands else None
 
+def _load_manifest():
+    try: return json.load(open(os.path.join(SCRIPTS_DIR, 'manifest.json'), encoding='utf-8'))
+    except Exception: return {}
+
+_ORDER = {'daemon': 0, 'tool': 1, 'legacy': 2}
 def scripts_snapshot():
+    man = _load_manifest()
     out = []
     for f in sorted(glob.glob(os.path.join(SCRIPTS_DIR, '*.py'))):
         stem = os.path.splitext(os.path.basename(f))[0]
@@ -228,9 +234,12 @@ def scripts_snapshot():
         if log:
             try: tail = open(log, encoding='utf-8', errors='replace').read().splitlines()[-15:]
             except Exception: pass
+        m = man.get(stem, {})
         out.append({'name': stem, 'running': running, 'managed': managed,
+                    'mode': m.get('mode', 'tool'), 'desc': m.get('desc', ''),
                     'log': os.path.basename(log) if log else None,
                     'log_age': int(time.time() - lm) if lm else None, 'tail': tail})
+    out.sort(key=lambda x: (_ORDER.get(x['mode'], 1), 0 if x['running'] else 1, x['name']))
     return out
 
 @app.route('/api/scripts')
