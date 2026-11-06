@@ -4,7 +4,7 @@ d=r'D:\project\偷菜\_recon'; ROOT='https://www.0809.one'; UA='Mozilla/5.0'; CK
 CKF=os.path.join(d,'mycookie_lllliii.txt'); OUT=os.path.join(d,'..','results'); LOG=os.path.join(OUT,'farm_master.log')
 ME=1692
 TOK={'v':'','exp':0}; TLOCK=threading.Lock()
-RL=threading.Lock(); _last=[0.0]; GAP=0.12
+RL=threading.Lock(); _last=[0.0]; GAP=0.3
 def log(s):
     line=time.strftime('%H:%M:%S ')+str(s); print(line,flush=True)
     try: open(LOG,'a',encoding='utf-8').write(line+'\n')
@@ -52,10 +52,18 @@ def token(force=False):
     if force or not v or e-time.time()<120:
         if not refresh(): raise RuntimeError('auth')
     return TOK['v']
+def _live_dump(d):
+    try:
+        stt=d['state']; qv=stt.get('qqView',{}); s1=stt.get('stats',{}) or {}; sl=stt.get('steal',{}) or {}; pl=qv.get('plots',[])
+        live={'ts':int(time.time()),'level':qv.get('level'),'levelProgress':qv.get('levelProgress'),'levelRequired':qv.get('levelRequired'),'stars':stt.get('stars'),'coins':stt.get('coins'),'steals_total':s1.get('steals'),'steal_today':sl.get('count'),'harvests':s1.get('harvests'),'planted':s1.get('planted'),'orders_done':s1.get('ordersDone'),'plots_count':len(pl),'mature_count':sum(1 for p in pl if p.get('mature'))}
+        open(os.path.join(OUT,'farm_live.json'),'w',encoding='utf-8').write(json.dumps(live,ensure_ascii=False))
+    except Exception: pass
 def getstate():
     st,s,_=http('GET',ROOT+'/api/farm2d/farm/state',token=token())
     if st==401: token(True); st,s,_=http('GET',ROOT+'/api/farm2d/farm/state',token=token())
-    return s['data'] if st==200 and s.get('success') else None
+    if st==200 and s.get('success'):
+        _live_dump(s['data']); return s['data']
+    return None
 def act(name,params,kind='wrap'):
     for r in range(5):
         dd0=getstate()
@@ -110,6 +118,11 @@ def farm_pass():
     dd=getstate()
     if dd:
         qv=dd['state']['qqView']; log(f'[farm] lvl={qv["level"]} lp={qv["levelProgress"]}/{qv["levelRequired"]} stars={dd["state"]["stars"]} coins={dd["state"]["coins"]} plots={[(i,p.get("cropId"),p.get("mature"),p.get("remaining")) for i,p in enumerate(qv["plots"])]}')
+        try:
+            _st=dd['state'].get('stats',{}) or {}; _sl=dd['state'].get('steal',{}) or {}; _pl=qv.get('plots',[])
+            _live={'ts':int(time.time()),'level':qv.get('level'),'levelProgress':qv.get('levelProgress'),'levelRequired':qv.get('levelRequired'),'stars':dd['state'].get('stars'),'coins':dd['state'].get('coins'),'steals_total':_st.get('steals'),'steal_today':_sl.get('count'),'harvests':_st.get('harvests'),'planted':_st.get('planted'),'orders_done':_st.get('ordersDone'),'plots_count':len(_pl),'mature_count':sum(1 for p in _pl if p.get('mature'))}
+            open(os.path.join(OUT,'farm_live.json'),'w',encoding='utf-8').write(json.dumps(_live,ensure_ascii=False))
+        except Exception: pass
 def steal_neighbors():
     st,nb,_=http('GET',ROOT+'/api/farm2d/farm/neighbors',token=token())
     tg=[]
@@ -119,7 +132,7 @@ def steal_neighbors():
                 if p.get('qq'): tg.append({'victim':n['user_id'],'plot':p['i'],'round':p['round']})
     if tg:
         ok,msg=act('qqStealAll',{'targets':tg},'direct'); log(f'[steal-neigh] {len(tg)} -> {ok} {str(msg)[:30]}')
-def scan_batch(n=120):
+def scan_batch(n=40):
     global CUR
     start=CUR[0]; ids=[]
     i=start
@@ -133,7 +146,7 @@ def scan_batch(n=120):
             return [{'victim':uid,'plot':k,'round':int(p['round'])} for k,p in enumerate(g['data'].get('plots',[])) if p.get('canSteal') is True and p.get('round')]
         return []
     tg=[]
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=3) as ex:
         for r in ex.map(rd, ids):
             tg.extend(r)
     if tg:
@@ -142,10 +155,10 @@ def steal_loop(stop, duration):
     t0=time.time()
     while not stop.is_set() and time.time()-t0<duration:
         try:
-            steal_neighbors(); scan_batch(120)
+            steal_neighbors(); scan_batch(40)
         except Exception as e:
             log('steal err '+str(e)[:80])
-        time.sleep(1.5)
+        time.sleep(6)
 def main(duration=7200):
     open(LOG,'w',encoding='utf-8').close()
     if not refresh(): log('auth fail'); return

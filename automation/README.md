@@ -27,3 +27,8 @@
 - 本 NewAPI 部署对 `buyDog/buyKennel/setGuardDog` 返回 `QQ action is not connected`（与商会/工坊同类，模块未接通），**守护犬当前无法启用**。
 - 可行的防被偷手段 = **成熟即收**：`farm_master.py` 每轮先收获成熟地块，压缩“成熟→收获”的暴露窗口，减少被邻居偷取。
 - 看板「被偷记录」面板持续展示谁在偷、偷了多少，便于评估。
+
+## 实时数据桥接（farm_live.json）
+- farm_master 每次取 state 成功即写 results/farm_live.json
+- 看板设 FARM_LIVE_JSON 指向该文件，优先读文件入库（无需登录/不占会话/不受限频）
+- 示例：FARM_LIVE_JSON=../results/farm_live.json COLLECT_INTERVAL=45 python app.py

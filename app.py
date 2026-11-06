@@ -328,15 +328,39 @@ def collect_once():
             'steals_total': stats.get('steals'), 'steal_today': steal.get('count'), 'thefts_today': thefts_today,
             'neighbors': len(neigh), 'qq_neighbors': qq_neighbors}
 
+def collect_from_live_file():
+    p = os.environ.get('FARM_LIVE_JSON')
+    if not p or not os.path.exists(p): return False
+    if time.time() - os.path.getmtime(p) > 900: return False
+    live = json.load(open(p, encoding='utf-8'))
+    c = db()
+    c.execute("""INSERT INTO snapshots(ts,level,levelProgress,levelRequired,stars,coins,steals_total,steal_today,thefts_today,harvests,planted,orders_done,plots_count,mature_count,neighbors,qq_neighbors,harvest_stars,order_stars,payload)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (int(live.get('ts') or time.time()), live.get('level'), live.get('levelProgress'), live.get('levelRequired'),
+         live.get('stars'), live.get('coins'), live.get('steals_total'), live.get('steal_today'), 0,
+         live.get('harvests'), live.get('planted'), live.get('orders_done'), live.get('plots_count'), live.get('mature_count'),
+         0, 0, 0, 0, json.dumps({'source': 'farm_live', 'live': live}, ensure_ascii=False)))
+    c.commit(); c.close()
+    STATUS['last_collect'] = int(time.time()); STATUS['last_error'] = '数据源: farm_master 文件桥接'; STATUS['collects'] += 1
+    return True
+
 def collector_loop():
-    time.sleep(3)
+    time.sleep(5)
     while True:
         try:
-            if get_farm_creds(): collect_once()
-            else: STATUS['last_error'] = '未配置农场账号(后台设置)'
-        except Exception as e:
-            STATUS['last_error'] = str(e)[:300]; STATUS['logged_in'] = False
-        time.sleep(max(30, INTERVAL))
+            if collect_from_live_file():
+                time.sleep(max(20, INTERVAL)); continue
+        except Exception:
+            pass
+        for attempt in range(4):
+            try:
+                if get_farm_creds(): collect_once()
+                else: STATUS['last_error'] = '未配置农场账号(后台设置)'
+                break
+            except Exception as e:
+                STATUS['last_error'] = str(e)[:300]; STATUS['logged_in'] = False
+                time.sleep(20)
+        time.sleep(max(60, INTERVAL))
 
 if __name__ == '__main__':
     threading.Thread(target=collector_loop, daemon=True).start()
