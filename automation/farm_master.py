@@ -184,7 +184,7 @@ def _ws_on_frame(m):
         WS['connected']=True;WS['last_ts']=int(time.time())
         WS['counts'][t]=WS['counts'].get(t,0)+1
         if isinstance(d,dict) and isinstance(d.get('state'),dict):
-            try:_live_dump(d);WS['latest']=_extract(d)
+            try:WS['latest']=_extract(d)
             except Exception:pass
         ev={'ts':int(time.time()),'type':t,'sum':_summ(t,m)}
         WS['recent'].append(ev);WS['recent']=WS['recent'][-60:]

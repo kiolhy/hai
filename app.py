@@ -230,8 +230,9 @@ def _proc_running(name):
 def _proc_pid(name):
     p = MANAGED.get(name); return p.pid if (p and p.poll() is None) else None
 def _external_running(name):
-    log = _log_for(name)
-    return bool(log and time.time() - os.path.getmtime(log) < 150 and not _proc_running(name))
+    log = os.path.join(SCRIPTS_LOG_DIR, name + '.log')
+    if not os.path.exists(log): return False
+    return bool(time.time() - os.path.getmtime(log) < 150 and not _proc_running(name))
 def _start_script(name):
     path = os.path.join(SCRIPTS_DIR, name + '.py')
     if not os.path.exists(path): return False, '脚本不存在'
