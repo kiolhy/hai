@@ -7,7 +7,7 @@ hai v2 — 鉴权 + 网页配置 + 全量数据看板
 import os, json, time, sqlite3, threading, secrets, functools, subprocess, sys, glob, re
 import requests
 from flask import (Flask, request, session, redirect, url_for, jsonify,
-                   render_template, abort)
+                   render_template, abort, Response)
 from werkzeug import security as _ws
 from cryptography.fernet import Fernet
 
@@ -52,6 +52,8 @@ def db():
         harvests INT, planted INT, orders_done INT,
         plots_count INT, mature_count INT, neighbors INT, qq_neighbors INT,
         harvest_stars INT, order_stars INT, payload TEXT)""")
+    c.execute("CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_snap_ts ON snapshots(ts)")
     return c
 
 def get_account():
@@ -211,7 +213,54 @@ def api_status():
 SCRIPTS_DIR = os.path.join(HERE, 'automation')
 SCRIPTS_LOG_DIR = os.environ.get('SCRIPTS_LOG_DIR', os.path.join(HERE, 'logs'))
 os.makedirs(SCRIPTS_DIR, exist_ok=True); os.makedirs(SCRIPTS_LOG_DIR, exist_ok=True)
-RUNNING = {}
+# ---- settings(resident) + process supervisor ----
+def get_setting(k, d=''):
+    try:
+        c = db(); r = c.execute("SELECT v FROM settings WHERE k=?", (k,)).fetchone(); c.close()
+        return r[0] if r else d
+    except Exception: return d
+def set_setting(k, v):
+    c = db(); c.execute("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, str(v))); c.commit(); c.close()
+
+MANAGED = {}          # name -> Popen started by this app
+MGR = threading.Lock()
+
+def _proc_running(name):
+    p = MANAGED.get(name); return bool(p and p.poll() is None)
+def _proc_pid(name):
+    p = MANAGED.get(name); return p.pid if (p and p.poll() is None) else None
+def _external_running(name):
+    log = _log_for(name)
+    return bool(log and time.time() - os.path.getmtime(log) < 150 and not _proc_running(name))
+def _start_script(name):
+    path = os.path.join(SCRIPTS_DIR, name + '.py')
+    if not os.path.exists(path): return False, '脚本不存在'
+    with MGR:
+        if _proc_running(name): return True, '已在运行(托管 pid %d)' % MANAGED[name].pid
+        if _external_running(name): return False, '外部已在运行(日志活跃)，为避免双开已拒绝；如确需托管请先在系统层面停止'
+        log = _log_for(name) or os.path.join(SCRIPTS_LOG_DIR, name + '.log')
+        fh = open(log, 'a', encoding='utf-8')
+        MANAGED[name] = subprocess.Popen([sys.executable, '-u', path], cwd=SCRIPTS_DIR, stdout=fh, stderr=subprocess.STDOUT)
+        return True, '已启动 pid %d' % MANAGED[name].pid
+def _stop_script(name):
+    p = MANAGED.get(name)
+    if p and p.poll() is None:
+        p.terminate()
+        try: p.wait(timeout=8)
+        except Exception: p.kill()
+        return True, '已停止(托管)'
+    if _external_running(name): return False, '外部进程运行中，请在系统层面停止'
+    return True, '未在运行'
+def resident_supervisor():
+    time.sleep(8)
+    while True:
+        try:
+            sel = get_setting('resident_script', '')
+            if sel and get_setting('resident_autostart', '0') == '1' and not _proc_running(sel) and not _external_running(sel):
+                ok, msg = _start_script(sel)
+                STATUS['resident_last'] = ('%s: %s' % (time.strftime('%H:%M:%S'), msg))
+        except Exception: pass
+        time.sleep(10)
 
 def _log_for(stem):
     cands = glob.glob(os.path.join(SCRIPTS_LOG_DIR, '**', '*%s*.log' % stem), recursive=True)
@@ -224,19 +273,21 @@ def _load_manifest():
 _ORDER = {'daemon': 0, 'tool': 1, 'legacy': 2}
 def scripts_snapshot():
     man = _load_manifest()
+    resident = get_setting('resident_script', ''); auto = get_setting('resident_autostart', '0') == '1'
     out = []
     for f in sorted(glob.glob(os.path.join(SCRIPTS_DIR, '*.py'))):
         stem = os.path.splitext(os.path.basename(f))[0]
-        p = RUNNING.get(stem); managed = p is not None; running = managed and p.poll() is None
+        managed = _proc_running(stem); external = _external_running(stem)
+        running = managed or external
         log = _log_for(stem); lm = os.path.getmtime(log) if log else 0
-        if not running and log and time.time() - lm < 180: running = True
         tail = []
         if log:
             try: tail = open(log, encoding='utf-8', errors='replace').read().splitlines()[-15:]
             except Exception: pass
         m = man.get(stem, {})
-        out.append({'name': stem, 'running': running, 'managed': managed,
-                    'mode': m.get('mode', 'tool'), 'desc': m.get('desc', ''),
+        out.append({'name': stem, 'running': running, 'managed': managed, 'external': external,
+                    'managed_pid': _proc_pid(stem), 'resident': (stem == resident and bool(resident)),
+                    'autostart': auto, 'mode': m.get('mode', 'tool'), 'desc': m.get('desc', ''),
                     'log': os.path.basename(log) if log else None,
                     'log_age': int(time.time() - lm) if lm else None, 'tail': tail})
     out.sort(key=lambda x: (_ORDER.get(x['mode'], 1), 0 if x['running'] else 1, x['name']))
@@ -273,19 +324,43 @@ def live_page(): return render_template('live.html')
 def admin_script(op, name):
     check_csrf()
     if not re.match(r'^[A-Za-z0-9_]+$', name): abort(400)
-    path = os.path.join(SCRIPTS_DIR, name + '.py')
-    if not os.path.exists(path): return jsonify(ok=False, error='脚本不存在'), 404
-    if op == 'stop':
-        p = RUNNING.get(name)
-        if p and p.poll() is None: p.terminate(); return jsonify(ok=True, msg='已停止')
-        return jsonify(ok=True, msg='非本服务托管/未在运行')
-    if op == 'start':
-        if RUNNING.get(name) and RUNNING[name].poll() is None: return jsonify(ok=True, msg='已在运行')
-        log = _log_for(name) or os.path.join(SCRIPTS_LOG_DIR, name + '.log')
-        fh = open(log, 'a', encoding='utf-8')
-        RUNNING[name] = subprocess.Popen([sys.executable, '-u', path], cwd=SCRIPTS_DIR, stdout=fh, stderr=subprocess.STDOUT)
-        return jsonify(ok=True, msg='已启动 pid %d' % RUNNING[name].pid)
-    abort(404)
+    if not os.path.exists(os.path.join(SCRIPTS_DIR, name + '.py')): return jsonify(ok=False, error='脚本不存在'), 404
+    if op == 'start': ok, msg = _start_script(name)
+    elif op == 'stop': ok, msg = _stop_script(name)
+    else: abort(404)
+    return jsonify(ok=ok, msg=msg)
+
+@app.route('/admin/resident', methods=['POST'])
+@login_required
+def admin_resident():
+    check_csrf()
+    name = (request.form.get('script') or '').strip()
+    auto = request.form.get('autostart', '0') == '1'
+    if name and not os.path.exists(os.path.join(SCRIPTS_DIR, name + '.py')):
+        return jsonify(ok=False, error='脚本不存在'), 404
+    prev = get_setting('resident_script', '')
+    if prev and prev != name: _stop_script(prev)
+    set_setting('resident_script', name); set_setting('resident_autostart', '1' if auto else '0')
+    msg = ('已设为常驻: ' + name) if name else '已取消常驻'
+    if name and auto:
+        ok, m = _start_script(name); msg += ' | ' + m
+    return jsonify(ok=True, msg=msg)
+
+@app.route('/api/live/stream')
+@login_required
+def api_live_stream():
+    def gen():
+        last = ''
+        for _ in range(600):
+            p = _ws_status_path()
+            try: cur = open(p, encoding='utf-8').read() if os.path.exists(p) else ''
+            except Exception: cur = ''
+            if cur and cur != last:
+                last = cur; yield 'data: ' + cur.replace('\n', ' ') + '\n\n'
+            else:
+                yield ': ping\n\n'
+            time.sleep(2)
+    return Response(gen(), mimetype='text/event-stream', headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 # ---------------- farm collection ----------------
 STATUS = {'last_collect': 0, 'last_error': '', 'logged_in': False, 'started': time.time(), 'collects': 0}
@@ -355,18 +430,33 @@ def collect_once():
             'steals_total': stats.get('steals'), 'steal_today': steal.get('count'), 'thefts_today': thefts_today,
             'neighbors': len(neigh), 'qq_neighbors': qq_neighbors}
 
+SNAP_KEEP = int(os.environ.get('SNAP_KEEP', '8000'))
+SNAP_DAYS = int(os.environ.get('SNAP_DAYS', '14'))
+RETAIN_UNCHANGED = int(os.environ.get('RETAIN_UNCHANGED', '300'))
 def collect_from_live_file():
     p = os.environ.get('FARM_LIVE_JSON')
     if not p or not os.path.exists(p): return False
     if time.time() - os.path.getmtime(p) > 900: return False
     live = json.load(open(p, encoding='utf-8'))
     c = db()
-    c.execute("""INSERT INTO snapshots(ts,level,levelProgress,levelRequired,stars,coins,steals_total,steal_today,thefts_today,harvests,planted,orders_done,plots_count,mature_count,neighbors,qq_neighbors,harvest_stars,order_stars,payload)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (int(live.get('ts') or time.time()), live.get('level'), live.get('levelProgress'), live.get('levelRequired'),
-         live.get('stars'), live.get('coins'), live.get('steals_total'), live.get('steal_today'), 0,
-         live.get('harvests'), live.get('planted'), live.get('orders_done'), live.get('plots_count'), live.get('mature_count'),
-         0, 0, 0, 0, json.dumps({'source': 'farm_live', 'live': live}, ensure_ascii=False)))
+    last = c.execute("SELECT ts,level,levelProgress,stars,coins,steals_total,steal_today FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+    cur = (live.get('level'), live.get('levelProgress'), live.get('stars'), live.get('coins'), live.get('steals_total'), live.get('steal_today'))
+    changed = (not last) or (tuple(last[1:7]) != cur)
+    stale = (not last) or (time.time() - last[0] >= RETAIN_UNCHANGED)
+    if changed or stale:
+        payload = {'source': 'farm_live', 'live': live}
+        for k in ('plots', 'orders', 'tasks', 'thefts', 'steal_log'):
+            if live.get(k) is not None: payload[k] = live.get(k)
+        c.execute("""INSERT INTO snapshots(ts,level,levelProgress,levelRequired,stars,coins,steals_total,steal_today,thefts_today,harvests,planted,orders_done,plots_count,mature_count,neighbors,qq_neighbors,harvest_stars,order_stars,payload)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (int(live.get('ts') or time.time()), live.get('level'), live.get('levelProgress'), live.get('levelRequired'),
+             live.get('stars'), live.get('coins'), live.get('steals_total'), live.get('steal_today'), live.get('thefts_today', 0),
+             live.get('harvests'), live.get('planted'), live.get('orders_done'), live.get('plots_count'), live.get('mature_count'),
+             live.get('neighbors', 0), live.get('qq_neighbors', 0), live.get('harvest_stars', 0), live.get('order_stars', 0), json.dumps(payload, ensure_ascii=False)))
+    try:
+        c.execute("DELETE FROM snapshots WHERE id <= (SELECT MAX(id) - ? FROM snapshots)", (SNAP_KEEP,))
+        c.execute("DELETE FROM snapshots WHERE ts < ?", (int(time.time()) - SNAP_DAYS * 86400,))
+    except Exception: pass
     c.commit(); c.close()
     STATUS['last_collect'] = int(time.time()); STATUS['last_error'] = '数据源: farm_master 文件桥接'; STATUS['collects'] += 1
     return True
@@ -379,16 +469,22 @@ def collector_loop():
                 time.sleep(max(20, INTERVAL)); continue
         except Exception:
             pass
-        for attempt in range(4):
-            try:
-                if get_farm_creds(): collect_once()
-                else: STATUS['last_error'] = '未配置农场账号(后台设置)'
-                break
-            except Exception as e:
-                STATUS['last_error'] = str(e)[:300]; STATUS['logged_in'] = False
-                time.sleep(20)
+        sel = get_setting('resident_script', '')
+        busy = bool(sel and (_proc_running(sel) or _external_running(sel)))
+        if busy:
+            STATUS['last_error'] = '常驻脚本运行中，跳过登录采集(用文件桥接)'
+        else:
+            for attempt in range(3):
+                try:
+                    if get_farm_creds(): collect_once()
+                    else: STATUS['last_error'] = '未配置农场账号(后台设置)'
+                    break
+                except Exception as e:
+                    STATUS['last_error'] = str(e)[:300]; STATUS['logged_in'] = False
+                    time.sleep(25)
         time.sleep(max(60, INTERVAL))
 
 if __name__ == '__main__':
     threading.Thread(target=collector_loop, daemon=True).start()
+    threading.Thread(target=resident_supervisor, daemon=True).start()
     app.run(host='0.0.0.0', port=PORT)

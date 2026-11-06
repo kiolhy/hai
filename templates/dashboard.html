@@ -72,12 +72,9 @@ async function load(){
     document.getElementById('theftToday').textContent=d.thefts_today??'-'; document.getElementById('neigh').textContent=(d.neighbors??'-')+' / '+(d.qq_neighbors??'-');
     document.getElementById('plotsN').textContent=(d.mature_count??'-')+' / '+(d.plots_count??'-');
     const pl=document.getElementById('plots'); pl.innerHTML='';
-    (p.orders?null:null);
-    (d.payload&&d.payload.plots)||null;
-    // plots not stored fully in snapshots payload; derive from payload if present
     const plots=(p.plots||[]);
-    if(!plots.length){document.getElementById('plotnote').textContent='(地块明细见采集 payload)';}
-    plots.forEach((pl2,i)=>{const el=document.createElement('div');el.className='plot '+(pl2.mature?'mature':'')+(!pl2.cropId?' empty':'');el.innerHTML=`<div class="mut">#${i}</div><div class="cid">${pl2.cropId??'-'}</div>`;pl.appendChild(el)});
+    document.getElementById('plotnote').textContent = plots.length? '' : '(暂无地块数据)';
+    plots.forEach((pl2,i)=>{const el=document.createElement('div');const st=pl2.mature?'成熟':(pl2.remaining!=null?Math.round(pl2.remaining/60)+'m':'生长中');el.className='plot '+(pl2.mature?'mature':'')+(!pl2.cropId?' empty':'');el.innerHTML=`<div class="mut">#${i}</div><div class="cid">${pl2.cropId??'-'}</div><div class="mut">${st}</div>`;pl.appendChild(el)});
     const sl=document.querySelector('#steallog tbody');sl.innerHTML='';
     (p.steal_log||[]).forEach(r=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${r.ts?new Date(r.ts).toLocaleTimeString():''}</td><td>${(r.action||'').replace('qqStealAll','批量偷')}</td><td>${r.stolen??0}</td><td>${r.blocked??0}</td><td>${r.skipped??0}</td><td>+${r.stars??0}</td>`;sl.appendChild(tr)});
     if(!(p.steal_log||[]).length)sl.innerHTML='<tr><td colspan="6" class="mut">暂无</td></tr>';

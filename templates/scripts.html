@@ -1,40 +1,45 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="csrf" content="{{ csrf_token() }}">
 <title>hai · 脚本监控</title>
-<style>body{margin:0;background:#0d1117;color:#e6edf3;font-family:system-ui,"Microsoft YaHei",sans-serif}header{padding:14px 22px;border-bottom:1px solid #21262d;display:flex;gap:14px;align-items:center}header a,header .lnk{color:#58a6ff;text-decoration:none;font-size:13px;cursor:pointer}header h1{font-size:16px;margin:0}.wrap{padding:16px 22px}.mut{color:#8b949e;font-size:12px}.ok{color:#3fb950}.err{color:#f85149}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #21262d;padding:7px;text-align:left;vertical-align:top}pre{margin:4px 0 0;max-height:110px;overflow:auto;background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:6px;color:#8b949e;font-size:11px;white-space:pre-wrap}button{padding:4px 9px;border:0;border-radius:6px;cursor:pointer;font-size:12px}.st{background:#238636;color:#fff}.sp{background:#30363d;color:#fff}.run{color:#3fb950}.idle{color:#8b949e}.warn{color:#f85149;font-weight:700}.banner{background:#161b22;border:1px solid #21262d;border-left:3px solid #1f6feb;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#c9d1d9;line-height:1.7}.tag{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px}.t-daemon{background:#1f6feb33;color:#58a6ff;border:1px solid #1f6feb55}.t-tool{background:#30363d;color:#c9d1d9}.t-legacy{background:#21262d;color:#6e7681}</style></head>
+<style>body{margin:0;background:#0d1117;color:#e6edf3;font-family:system-ui,"Microsoft YaHei",sans-serif}header{padding:14px 22px;border-bottom:1px solid #21262d;display:flex;gap:14px;align-items:center}header a,header .lnk{color:#58a6ff;text-decoration:none;font-size:13px;cursor:pointer}header h1{font-size:16px;margin:0}.wrap{padding:16px 22px}.mut{color:#8b949e;font-size:12px}.ok{color:#3fb950}.err{color:#f85149}table{width:100%;border-collapse:collapse;font-size:12px}th,td{border-bottom:1px solid #21262d;padding:7px;text-align:left;vertical-align:top}pre{margin:4px 0 0;max-height:110px;overflow:auto;background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:6px;color:#8b949e;font-size:11px;white-space:pre-wrap}button{padding:4px 9px;border:0;border-radius:6px;cursor:pointer;font-size:12px}.st{background:#238636;color:#fff}.sp{background:#30363d;color:#fff}.rs{background:#1f6feb;color:#fff}.run{color:#3fb950}.idle{color:#8b949e}.warn{color:#f85149;font-weight:700}.banner{background:#161b22;border:1px solid #21262d;border-left:3px solid #1f6feb;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:#c9d1d9;line-height:1.75}.tag{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px}.t-daemon{background:#1f6feb33;color:#58a6ff;border:1px solid #1f6feb55}.t-tool{background:#30363d;color:#c9d1d9}.t-legacy{background:#21262d;color:#6e7681}.star{color:#d29922;font-weight:700}.chip{display:inline-block;padding:1px 8px;border-radius:999px;background:#23863633;color:#3fb950;border:1px solid #23863655;font-size:11px}</style></head>
 <body><header><h1>📜 脚本监控</h1><a href="/">← 看板</a><a href="/live">📡 实时动态</a><a href="/admin">⚙ 后台</a>
 <form method="post" action="/logout" style="margin-left:auto"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="lnk" style="background:none;border:0;color:#58a6ff">退出</button></form></header>
 <div class="wrap">
  <div class="banner">
-   <b>关于“空闲”</b>：空闲 = 该脚本当前未运行，属正常。<br>
-   · <span class="tag t-daemon">常驻</span> 应保持运行（当前应只有 <b>farm_master</b> 常驻；<b>常驻却显示空闲会红字告警</b>）。<br>
-   · <span class="tag t-tool">工具</span> 一次性脚本（手动点“启动”跑一次即可）。 <span class="tag t-legacy">旧版</span> 历史版本，已被 farm_master 取代，无需再跑。<br>
-   · <b>不要同时开多个</b>：同账号并发会触发 `AUTH_SESSION_LIMIT` / 请求限频，正是我们已修复的问题，所以只让 farm_master 常驻。
+   <b>自己选择启动/常驻</b>：点某行「<span class="star">★ 设为常驻</span>」即可把它选为托管常驻脚本——服务会**自动拉起并在崩溃后重启**；同一时刻只允许一个常驻，切换会自动停掉旧的。<br>
+   · 顶部 <span class="chip" id="reschip">当前常驻：读取中…</span><br>
+   · <span class="tag t-daemon">常驻</span>推荐常驻 / <span class="tag t-tool">工具</span>一次性手动跑 / <span class="tag t-legacy">旧版</span>已废弃。<b>不要多开</b>：同账号并发会 `AUTH_SESSION_LIMIT`/限频。
  </div>
  <div class="mut" id="ldir"></div>
- <table><thead><tr><th style="width:230px">脚本</th><th style="width:70px">类型</th><th style="width:110px">状态</th><th style="width:130px">日志/更新</th><th>最近日志</th><th style="width:120px">操作</th></tr></thead><tbody id="tb"></tbody></table>
+ <table><thead><tr><th style="width:210px">脚本</th><th style="width:60px">类型</th><th style="width:120px">状态</th><th style="width:90px">常驻</th><th style="width:120px">日志/更新</th><th>最近日志</th><th style="width:210px">操作</th></tr></thead><tbody id="tb"></tbody></table>
 </div>
 <script>
 const CSRF=document.querySelector('meta[name=csrf]').content;
 const TN={daemon:'常驻',tool:'工具',legacy:'旧版'};
-async function ctl(op,name){const fd=new FormData();fd.set('csrf',CSRF);const r=await fetch('/admin/script/'+op+'/'+name,{method:'POST',body:fd,headers:{'X-CSRF':CSRF}});const j=await r.json().catch(()=>({ok:false,error:'HTTP '+r.status}));alert((j.ok?'OK: ':'失败: ')+(j.msg||j.error||''));load()}
+async function post(url,data){const fd=new FormData();for(const k in data)fd.set(k,data[k]);fd.set('csrf',CSRF);const r=await fetch(url,{method:'POST',body:fd,headers:{'X-CSRF':CSRF}});return r.json().catch(()=>({ok:false,error:'HTTP '+r.status}))}
+async function ctl(op,name){const j=await post('/admin/script/'+op+'/'+name,{});alert((j.ok?'OK: ':'失败: ')+(j.msg||j.error||''));load()}
+async function setRes(name,auto){const j=await post('/admin/resident',{script:name,autostart:auto?'1':'0'});alert((j.ok?'OK: ':'失败: ')+(j.msg||j.error||''));load()}
+function cls(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 async function load(){
   const j=await (await fetch('/api/scripts')).json();
   document.getElementById('ldir').textContent='日志目录: '+(j.log_dir||'');
+  const res=(j.scripts||[]).find(s=>s.resident);
+  document.getElementById('reschip').textContent='当前常驻：'+(res?res.name+(res.running?'（运行中）':'（⚠未运行）'):'无');
   const tb=document.getElementById('tb'); tb.innerHTML='';
   (j.scripts||[]).forEach(s=>{
-    const tr=document.createElement('tr');
-    const mode=s.mode||'tool';
+    const tr=document.createElement('tr');const mode=s.mode||'tool';
     let st;
-    if(s.running) st='<span class="run">● 运行中</span>';
-    else if(mode==='daemon') st='<span class="warn">⚠ 空闲(应运行)</span>';
+    if(s.running) st='<span class="run">● 运行中</span>'+(s.managed?'<div class="mut">托管 '+(s.managed_pid||'')+'</div>':(s.external?'<div class="mut">外部进程</div>':''));
+    else if(s.resident) st='<span class="warn">⚠ 空闲(应运行)</span>';
     else st='<span class="idle">○ 空闲</span>';
     const age=s.log_age!=null?(s.log_age+'s前'):'无日志';
-    tr.innerHTML=`<td><b>${s.name}</b> <span class="tag t-${mode}">${TN[mode]||mode}</span><div class="mut">${s.desc||''}</div></td>
-      <td><span class="tag t-${mode}">${TN[mode]||mode}</span></td>
-      <td>${st}</td><td>${s.log||'-'}<div class="mut">${age}</div></td>
-      <td><pre>${(s.tail||[]).map(x=>x.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))).join('\n')||'（无）'}</pre></td>
-      <td><button class="st" onclick="ctl('start','${s.name}')">启动</button> <button class="sp" onclick="ctl('stop','${s.name}')">停止</button></td>`;
+    const resCell=s.resident?'<span class="star">★常驻</span>':'<span class="mut">—</span>';
+    const opRes=s.resident?`<button class="sp" onclick="setRes('',false)">取消常驻</button>`:`<button class="rs" onclick="setRes('${s.name}',true)">★设为常驻</button>`;
+    tr.innerHTML=`<td><b>${s.name}</b> <span class="tag t-${mode}">${TN[mode]||mode}</span><div class="mut">${cls(s.desc||'')}</div></td>
+      <td><span class="tag t-${mode}">${TN[mode]||mode}</span></td><td>${st}</td><td>${resCell}</td>
+      <td>${s.log||'-'}<div class="mut">${age}</div></td>
+      <td><pre>${(s.tail||[]).map(cls).join('\n')||'（无）'}</pre></td>
+      <td><button class="st" onclick="ctl('start','${s.name}')">启动</button> <button class="sp" onclick="ctl('stop','${s.name}')">停止</button> ${opRes}</td>`;
     tb.appendChild(tr);
   });
 }

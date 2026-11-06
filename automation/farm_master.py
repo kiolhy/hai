@@ -55,7 +55,8 @@ def token(force=False):
 def _live_dump(d):
     try:
         stt=d['state']; qv=stt.get('qqView',{}); s1=stt.get('stats',{}) or {}; sl=stt.get('steal',{}) or {}; pl=qv.get('plots',[])
-        live={'ts':int(time.time()),'level':qv.get('level'),'levelProgress':qv.get('levelProgress'),'levelRequired':qv.get('levelRequired'),'stars':stt.get('stars'),'coins':stt.get('coins'),'steals_total':s1.get('steals'),'steal_today':sl.get('count'),'harvests':s1.get('harvests'),'planted':s1.get('planted'),'orders_done':s1.get('ordersDone'),'plots_count':len(pl),'mature_count':sum(1 for p in pl if p.get('mature'))}
+        plots=[{'i':i,'cropId':p.get('cropId'),'mature':p.get('mature'),'remaining':p.get('remaining'),'stage':p.get('stageName'),'weed':p.get('weed'),'pest':p.get('pest'),'humidity':p.get('humidity')} for i,p in enumerate(pl)]
+        live={'ts':int(time.time()),'level':qv.get('level'),'levelProgress':qv.get('levelProgress'),'levelRequired':qv.get('levelRequired'),'stars':stt.get('stars'),'coins':stt.get('coins'),'steals_total':s1.get('steals'),'steal_today':sl.get('count'),'harvests':s1.get('harvests'),'planted':s1.get('planted'),'orders_done':s1.get('ordersDone'),'plots_count':len(pl),'mature_count':sum(1 for p in pl if p.get('mature')),'plots':plots,'orders':stt.get('orders',[]),'tasks':stt.get('fieldTasks')}
         open(os.path.join(OUT,'farm_live.json'),'w',encoding='utf-8').write(json.dumps(live,ensure_ascii=False))
     except Exception: pass
 def getstate():
