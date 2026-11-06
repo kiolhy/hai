@@ -5,3 +5,6 @@ data/*.db
 data/*.db-*
 *.log
 .venv/
+data/
+data_test/
+*.key

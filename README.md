@@ -85,3 +85,10 @@ systemctl daemon-reload && systemctl enable --now hai
 MIT
 
 # hai
+
+## v2 更新（鉴权 + 网页配置 + 全量面板）
+- 进站需访问密码：首次访问 /setup 设置，之后 /login 登录；PBKDF2 哈希 + 会话 + CSRF + 登录限流。
+- 农场账号在 /admin 网页输入，Fernet 加密存储（不再写死环境变量）。
+- 后台 /admin：改访问密码、设农场账号、手动采集、查看状态。
+- 看板：等级/经验/钻石/金币、偷菜（累计/今日/趋势/流水/被偷记录）、收获/订单趋势、地块。
+- 方案见 DESIGN.md。

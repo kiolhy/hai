@@ -1,0 +1,102 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf" content="{{ csrf_token() }}">
+<title>hai · 百川农场数据看板</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#21262d;--fg:#e6edf3;--mut:#8b949e;--accent:#3fb950;--gold:#d29922;--gem:#58a6ff;--red:#f85149}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--fg)}
+header{padding:14px 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px}
+header h1{font-size:17px;margin:0}header .tag{color:var(--mut);font-size:12px}header a,header .lnk{color:#58a6ff;text-decoration:none;font-size:13px;cursor:pointer}
+.wrap{padding:18px 22px;display:flex;flex-direction:column;gap:14px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.card .k{color:var(--mut);font-size:12px}.card .v{font-size:22px;font-weight:700;margin-top:3px}
+.v.stars{color:var(--gem)}.v.coins{color:var(--gold)}.v.lvl{color:var(--accent)}.v.steal{color:var(--red)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+.grid4{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:900px){.grid4{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}.panel h2{font-size:13px;margin:0 0 8px;color:var(--fg)}
+.plots{display:grid;grid-template-columns:repeat(auto-fill,minmax(62px,1fr));gap:7px}
+.plot{background:#0d1117;border:1px solid var(--line);border-radius:9px;padding:6px;font-size:11px;text-align:center}
+.plot.mature{outline:1px solid var(--accent)}.plot.empty{opacity:.5}.plot .cid{font-weight:700;color:var(--gem)}
+.mut{color:var(--mut);font-size:12px}table{width:100%;border-collapse:collapse;font-size:12px}td,th{border-bottom:1px solid var(--line);padding:5px;text-align:left}
+.ok{color:var(--accent)}.err{color:var(--red)}
+</style></head>
+<body>
+<header><h1>🌾 hai · 百川农场数据看板</h1><span class="tag" id="cfg">加载中…</span>
+ <a href="/admin" style="margin-left:auto">⚙ 后台</a>
+ <form method="post" action="/logout" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="lnk" style="background:none;border:0;color:#58a6ff;font-size:13px;cursor:pointer">退出</button></form>
+</header>
+<div class="wrap">
+  <div class="cards">
+    <div class="card"><div class="k">等级 / 经验</div><div class="v lvl" id="lv">-</div></div>
+    <div class="card"><div class="k">钻石</div><div class="v stars" id="stars">-</div></div>
+    <div class="card"><div class="k">金币</div><div class="v coins" id="coins">-</div></div>
+    <div class="card"><div class="k">累计偷菜</div><div class="v steal" id="steals">-</div></div>
+    <div class="card"><div class="k">今日偷菜</div><div class="v steal" id="stealToday">-</div></div>
+    <div class="card"><div class="k">今日被偷</div><div class="v" id="theftToday">-</div></div>
+    <div class="card"><div class="k">邻居可偷</div><div class="v" id="neigh">-</div></div>
+    <div class="card"><div class="k">地块成熟/总</div><div class="v" id="plotsN">-</div></div>
+  </div>
+  <div class="grid4">
+    <div class="panel"><h2>💎 钻石 / 金币 趋势</h2><canvas id="c1" height="120"></canvas></div>
+    <div class="panel"><h2>📈 等级经验 趋势</h2><canvas id="c2" height="120"></canvas></div>
+  </div>
+  <div class="grid4">
+    <div class="panel"><h2>🥷 偷菜趋势（今日偷 / 今日被偷）</h2><canvas id="c3" height="120"></canvas></div>
+    <div class="panel"><h2>🌱 收获 / 订单 趋势</h2><canvas id="c4" height="120"></canvas></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h2>地块状态</h2><div class="plots" id="plots"></div><div class="mut" id="plotnote"></div></div>
+    <div class="panel"><h2>偷菜流水（我偷）</h2><table id="steallog"><thead><tr><th>时间</th><th>动作</th><th>偷到</th><th>被拦</th><th>跳过</th><th>钻石</th></tr></thead><tbody></tbody></table></div>
+  </div>
+  <div class="grid2">
+    <div class="panel"><h2>被偷记录（谁偷我）</h2><table id="thefts"><thead><tr><th>窃贼ID</th><th>地块</th><th>数量</th><th>时间</th></tr></thead><tbody></tbody></table></div>
+    <div class="panel"><h2>订单 / 任务 / 采集状态</h2><table id="orders"><tbody></tbody></table><div id="tasks" class="mut" style="margin-top:8px"></div><div id="status" class="mut" style="margin-top:6px"></div></div>
+  </div>
+</div>
+<script>
+async function J(u){const r=await fetch(u);return r.json()}
+function ts(x){return new Date(x*1000).toLocaleString()}
+let charts={};
+function mkline(id,ds,y1){return new Chart(document.getElementById(id),{type:'line',data:{labels:[],datasets:ds},options:{plugins:{legend:{labels:{color:'#8b949e',boxWidth:10}}},scales:{x:{ticks:{color:'#8b949e',maxTicksLimit:8},grid:{color:'#21262d'}},y:{ticks:{color:'#8b949e'},grid:{color:'#21262d'}},y1:{position:'right',ticks:{color:'#d29922'},grid:{drawOnChartArea:false}}},animation:false}})}
+async function load(){
+  const cfg=await J('/api/status'); document.getElementById('cfg').textContent=`base=${cfg.config.base} · 间隔${cfg.config.interval}s · 采集${cfg.status.collects}次 · ${cfg.config.has_farm_creds?'凭据已配':'凭据未配'}`;
+  document.getElementById('status').innerHTML=`<span class="${cfg.status.last_error?'err':'ok'}">采集器:${cfg.status.last_error?('错误 '+cfg.status.last_error):'正常'}</span>`;
+  const l=await J('/api/latest');
+  if(l.ok){const d=l.data,p=d.payload||{};
+    document.getElementById('lv').textContent=(d.level??'-')+' / '+(d.levelProgress??'-');
+    document.getElementById('stars').textContent=d.stars??'-'; document.getElementById('coins').textContent=(d.coins??0).toLocaleString();
+    document.getElementById('steals').textContent=d.steals_total??'-'; document.getElementById('stealToday').textContent=d.steal_today??'-';
+    document.getElementById('theftToday').textContent=d.thefts_today??'-'; document.getElementById('neigh').textContent=(d.neighbors??'-')+' / '+(d.qq_neighbors??'-');
+    document.getElementById('plotsN').textContent=(d.mature_count??'-')+' / '+(d.plots_count??'-');
+    const pl=document.getElementById('plots'); pl.innerHTML='';
+    (p.orders?null:null);
+    (d.payload&&d.payload.plots)||null;
+    // plots not stored fully in snapshots payload; derive from payload if present
+    const plots=(p.plots||[]);
+    if(!plots.length){document.getElementById('plotnote').textContent='(地块明细见采集 payload)';}
+    plots.forEach((pl2,i)=>{const el=document.createElement('div');el.className='plot '+(pl2.mature?'mature':'')+(!pl2.cropId?' empty':'');el.innerHTML=`<div class="mut">#${i}</div><div class="cid">${pl2.cropId??'-'}</div>`;pl.appendChild(el)});
+    const sl=document.querySelector('#steallog tbody');sl.innerHTML='';
+    (p.steal_log||[]).forEach(r=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${r.ts?new Date(r.ts).toLocaleTimeString():''}</td><td>${(r.action||'').replace('qqStealAll','批量偷')}</td><td>${r.stolen??0}</td><td>${r.blocked??0}</td><td>${r.skipped??0}</td><td>+${r.stars??0}</td>`;sl.appendChild(tr)});
+    if(!(p.steal_log||[]).length)sl.innerHTML='<tr><td colspan="6" class="mut">暂无</td></tr>';
+    const tf=document.querySelector('#thefts tbody');tf.innerHTML='';
+    (p.thefts||[]).forEach(t=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${t.thief_id}</td><td>${t.plot}</td><td>${t.amount}</td><td>${new Date(t.ts).toLocaleString()}</td>`;tf.appendChild(tr)});
+    if(!(p.thefts||[]).length)tf.innerHTML='<tr><td colspan="4" class="mut">暂无</td></tr>';
+    const ob=document.querySelector('#orders tbody');ob.innerHTML='';
+    (p.orders||[]).forEach(o=>{const tr=document.createElement('tr');tr.innerHTML=`<td>#${o.id}</td><td>${(o.demands||[]).map(x=>x.crop+'×'+x.qty).join(', ')}</td><td>金币${o.coins??''} 经验+${o.xp??0} 星+${o.stars??0}</td>`;ob.appendChild(tr)});
+    if(!(p.orders||[]).length)ob.innerHTML='<tr><td class="mut">暂无订单</td></tr>';
+    const t=p.tasks||{};document.getElementById('tasks').textContent='丰收任务 进度'+JSON.stringify(t.progress||{})+' 奖励'+(t.reward??'')+' 可领'+(t.available??'');
+  } else { document.getElementById('plotnote').textContent=l.message||'';}
+  const h=await J('/api/history?limit=400'); const it=h.items||[];
+  const lab=it.map(x=>new Date(x.ts*1000).toLocaleTimeString());
+  if(!charts.c1){charts.c1=mkline('c1',[{label:'钻石',data:[],borderColor:'#58a6ff',tension:.25,pointRadius:0},{label:'金币',data:[],borderColor:'#d29922',tension:.25,pointRadius:0,yAxisID:'y1'}]);}
+  charts.c1.data.labels=lab; charts.c1.data.datasets[0].data=it.map(x=>x.stars); charts.c1.data.datasets[1].data=it.map(x=>x.coins); charts.c1.update();
+  if(!charts.c2){charts.c2=mkline('c2',[{label:'等级',data:[],borderColor:'#3fb950',tension:.25,pointRadius:0},{label:'经验进度',data:[],borderColor:'#8b949e',tension:.25,pointRadius:0,yAxisID:'y1'}]);}
+  charts.c2.data.labels=lab; charts.c2.data.datasets[0].data=it.map(x=>x.level); charts.c2.data.datasets[1].data=it.map(x=>x.levelProgress); charts.c2.update();
+  if(!charts.c3){charts.c3=mkline('c3',[{label:'今日偷菜',data:[],borderColor:'#f85149',tension:.25,pointRadius:0},{label:'今日被偷',data:[],borderColor:'#d29922',tension:.25,pointRadius:0}]);}
+  charts.c3.data.labels=lab; charts.c3.data.datasets[0].data=it.map(x=>x.steal_today); charts.c3.data.datasets[1].data=it.map(x=>x.thefts_today); charts.c3.update();
+  if(!charts.c4){charts.c4=mkline('c4',[{label:'收获',data:[],borderColor:'#3fb950',tension:.25,pointRadius:0},{label:'订单完成',data:[],borderColor:'#58a6ff',tension:.25,pointRadius:0}]);}
+  charts.c4.data.labels=lab; charts.c4.data.datasets[0].data=it.map(x=>x.harvests); charts.c4.data.datasets[1].data=it.map(x=>x.orders_done); charts.c4.update();
+}
+load();setInterval(load,30000);
+</script></body></html>

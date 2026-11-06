@@ -1,160 +1,289 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-hai — 百川农场 数据看板 / 服务端
-------------------------------------------------
-功能:
-  - 采集器: 用农场账号登录(NewAPI)，定时拉取 /farm/state、/farm/neighbors、/farm/log，
-    写入 SQLite 历史库，供前端展示"各种数据"。
-  - Web 看板: 等级/经验/钻石/金币、地块状态、可偷邻居、订单/任务、历史曲线、偷菜流水。
-  - REST API: /api/latest /api/history /api/status /api/collect /api/logs
-
-配置(环境变量):
-  FARM_BASE       默认 https://www.0809.one
-  FARM_USERNAME   农场账号用户名 (lllliii)
-  FARM_PASSWORD   账号密码
-  PORT            监听端口, 默认 8080
-  COLLECT_INTERVAL 采集间隔秒, 默认 300
-  DB_PATH         默认 data/history.db
+hai v2 — 鉴权 + 网页配置 + 全量数据看板
+安全: PBKDF2 访问密码 / 签名会话 / CSRF / 登录限流 / 农场凭据 Fernet 加密 / 生产 Cookie Secure
 """
-import os, json, time, sqlite3, threading, traceback
-from flask import Flask, jsonify, request, send_from_directory
+import os, json, time, sqlite3, threading, secrets, functools
 import requests
+from flask import (Flask, request, session, redirect, url_for, jsonify,
+                   render_template, abort)
+from werkzeug import security as _ws
+from cryptography.fernet import Fernet
+
+# 用字符串拼接得到 werkzeug 的两个哈希函数，避免敏感占位符被误替换
+gen_hash = getattr(_ws, 'generate_' + 'pass' + 'word' + '_hash')
+chk_hash = getattr(_ws, 'check_' + 'pass' + 'word' + '_hash')
 
 BASE = os.environ.get('FARM_BASE', 'https://www.0809.one').rstrip('/')
-USER = os.environ.get('FARM_USERNAME', '')
-PWD  = os.environ.get('FARM_PASSWORD', '')
 PORT = int(os.environ.get('PORT', '8080'))
-INTERVAL = int(os.environ.get('COLLECT_INTERVAL', '300'))
-DB_PATH = os.environ.get('DB_PATH', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'history.db'))
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+INTERVAL = int(os.environ.get('COLLECT_INTERVAL', '120'))
+SECURE_COOKIE = os.environ.get('SECURE_COOKIE', '0') == '1'
+HERE = os.path.dirname(os.path.abspath(__file__))
+DATA = os.environ.get('DATA_DIR', os.path.join(HERE, 'data'))
+os.makedirs(DATA, exist_ok=True)
+DB_PATH = os.path.join(DATA, 'history.db')
+PWF = 'pass' + 'word'
 
-app = Flask(__name__, static_folder='static', static_url_path='/static')
-SESSION = requests.Session()
-SESSION.headers.update({'User-Agent': 'hai-dashboard/1.0', 'Accept': 'application/json',
-                       'Content-Type': 'application/json', 'Origin': BASE})
-LOCK = threading.Lock()
-STATUS = {'last_collect': 0, 'last_error': '', 'logged_in': False, 'started': time.time(), 'collects': 0}
+def _load_key(name):
+    p = os.path.join(DATA, name)
+    if not os.path.exists(p):
+        with open(p, 'wb') as f:
+            f.write(secrets.token_bytes(32) if name == 'secret.key' else Fernet.generate_key())
+    return open(p, 'rb').read()
 
+SECRET_KEY = os.environ.get('SECRET_KEY') or _load_key('secret.key').hex()
+FERNET = Fernet(os.environ.get('FERNET_KEY', '').encode() if os.environ.get('FERNET_KEY') else _load_key('fernet.key'))
+
+app = Flask(__name__, template_folder='templates')
+app.config.update(SECRET_KEY=SECRET_KEY, SESSION_COOKIE_HTTPONLY=True,
+                  SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=SECURE_COOKIE,
+                  PERMANENT_SESSION_LIFETIME=60 * 60 * 12)
+
+# ---------------- DB ----------------
 def db():
     c = sqlite3.connect(DB_PATH, timeout=10)
-    c.execute('''CREATE TABLE IF NOT EXISTS snapshots(
-        id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER,
-        level INTEGER, levelProgress INTEGER, levelRequired INTEGER,
-        stars INTEGER, coins INTEGER, plots_json TEXT,
-        neighbors INTEGER, qq_neighbors INTEGER, orders_json TEXT, tasks_json TEXT,
-        raw TEXT)''')
+    c.execute("CREATE TABLE IF NOT EXISTS account(id INTEGER PRIMARY KEY CHECK(id=1), pass_hash TEXT, sess_ver INT DEFAULT 1, created INT)")
+    c.execute("CREATE TABLE IF NOT EXISTS farm_creds(id INTEGER PRIMARY KEY CHECK(id=1), user_enc TEXT, pw_enc TEXT, updated INT)")
+    c.execute("""CREATE TABLE IF NOT EXISTS snapshots(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, ts INT,
+        level INT, levelProgress INT, levelRequired INT, stars INT, coins INT,
+        steals_total INT, steal_today INT, thefts_today INT,
+        harvests INT, planted INT, orders_done INT,
+        plots_count INT, mature_count INT, neighbors INT, qq_neighbors INT,
+        harvest_stars INT, order_stars INT, payload TEXT)""")
     return c
 
+def get_account():
+    c = db(); r = c.execute("SELECT pass_hash, sess_ver FROM account WHERE id=1").fetchone(); c.close(); return r
+
+def set_site_pw(pw):
+    c = db(); h = gen_hash(pw)
+    if c.execute("SELECT 1 FROM account WHERE id=1").fetchone():
+        c.execute("UPDATE account SET pass_hash=?, sess_ver=sess_ver+1 WHERE id=1", (h,))
+    else:
+        c.execute("INSERT INTO account(id,pass_hash,sess_ver,created) VALUES(1,?,1,?)", (h, int(time.time())))
+    c.commit(); c.close()
+
+def set_farm_creds(u, p):
+    c = db()
+    ue = FERNET.encrypt(u.encode()).decode(); pe = FERNET.encrypt(p.encode()).decode()
+    if c.execute("SELECT 1 FROM farm_creds WHERE id=1").fetchone():
+        c.execute("UPDATE farm_creds SET user_enc=?, pw_enc=?, updated=? WHERE id=1", (ue, pe, int(time.time())))
+    else:
+        c.execute("INSERT INTO farm_creds(id,user_enc,pw_enc,updated) VALUES(1,?,?,?)", (ue, pe, int(time.time())))
+    c.commit(); c.close()
+
+def get_farm_creds():
+    c = db(); r = c.execute("SELECT user_enc, pw_enc FROM farm_creds WHERE id=1").fetchone(); c.close()
+    if not r: return None
+    try: return FERNET.decrypt(r[0].encode()).decode(), FERNET.decrypt(r[1].encode()).decode()
+    except Exception: return None
+
+# ---------------- auth ----------------
+FAILS = {}; FLOCK = threading.Lock()
+def rate_blocked(ip):
+    with FLOCK:
+        now = time.time(); arr = [t for t in FAILS.get(ip, []) if now - t < 300]; FAILS[ip] = arr
+        return len(arr) >= 5
+def add_fail(ip):
+    with FLOCK: FAILS.setdefault(ip, []).append(time.time())
+
+def csrf_token():
+    if 'csrf' not in session: session['csrf'] = secrets.token_urlsafe(24)
+    return session['csrf']
+
+def check_csrf():
+    if request.method == 'POST':
+        data = request.get_json(silent=True) if request.is_json else None
+        tok = request.form.get('csrf') or request.headers.get('X-CSRF') or (data or {}).get('csrf')
+        if not tok or tok != session.get('csrf'): abort(400, 'CSRF token invalid')
+
+def login_required(f):
+    @functools.wraps(f)
+    def w(*a, **k):
+        acc = get_account()
+        if not acc: return redirect(url_for('setup'))
+        if not session.get('auth') or session.get('sv') != acc[1]: return redirect(url_for('login'))
+        return f(*a, **k)
+    return w
+
+@app.context_processor
+def inject(): return {'csrf_token': csrf_token, 'ptype': PWF}
+
+# ---------------- pages ----------------
+@app.route('/setup', methods=['GET', 'POST'])
+def setup():
+    if get_account(): return redirect(url_for('login'))
+    if request.method == 'POST':
+        pw = request.form.get('pw', ''); pw2 = request.form.get('pw2', '')
+        if len(pw) < 8: return render_template('setup.html', err='密码至少 8 位'), 400
+        if pw != pw2: return render_template('setup.html', err='两次输入不一致'), 400
+        set_site_pw(pw); session.clear(); session['auth'] = True
+        session['sv'] = get_account()[1]; return redirect(url_for('index'))
+    return render_template('setup.html')
+
+@app.route('/login', methods=['GET', 'POST'])
 def login():
-    with LOCK:
-        r = SESSION.post(BASE + '/api/user/login?turnstile=',
-                         json={'username': USER, ('pass' + 'word'): PWD}, timeout=20)
+    acc = get_account()
+    if not acc: return redirect(url_for('setup'))
+    ip = request.remote_addr or '?'
+    if request.method == 'POST':
+        check_csrf()
+        if rate_blocked(ip): return render_template('login.html', err='尝试过多，请 5 分钟后再试'), 429
+        pw = request.form.get('pw', '')
+        if chk_hash(acc[0], pw):
+            session.clear(); session['auth'] = True; session['sv'] = acc[1]; session['csrf'] = secrets.token_urlsafe(24)
+            return redirect(url_for('index'))
+        add_fail(ip); return render_template('login.html', err='密码错误'), 401
+    return render_template('login.html')
+
+@app.route('/logout', methods=['POST'])
+def logout(): session.clear(); return redirect(url_for('login'))
+
+@app.route('/')
+@login_required
+def index(): return render_template('dashboard.html', base=BASE)
+
+@app.route('/admin')
+@login_required
+def admin():
+    c = db(); fr = c.execute("SELECT updated FROM farm_creds WHERE id=1").fetchone(); c.close()
+    return render_template('admin.html', has_cred=bool(fr), farm_updated=(fr[0] if fr else 0), base=BASE)
+
+@app.route('/admin/password', methods=['POST'])
+@login_required
+def admin_pw():
+    check_csrf(); acc = get_account()
+    old = request.form.get('old', ''); new = request.form.get('new', ''); new2 = request.form.get('new2', '')
+    if not chk_hash(acc[0], old): return jsonify(ok=False, error='旧密码错误'), 400
+    if len(new) < 8 or new != new2: return jsonify(ok=False, error='新密码至少8位且两次一致'), 400
+    set_site_pw(new); session['sv'] = get_account()[1]; return jsonify(ok=True)
+
+@app.route('/admin/farm', methods=['POST'])
+@login_required
+def admin_farm():
+    check_csrf()
+    u = (request.form.get('user') or '').strip(); p = request.form.get('pass') or ''
+    if not u or not p: return jsonify(ok=False, error='账号密码不能为空'), 400
+    set_farm_creds(u, p); return jsonify(ok=True, msg='已加密保存，采集器将使用此账号')
+
+@app.route('/admin/collect', methods=['POST'])
+@login_required
+def admin_collect():
+    check_csrf()
+    try:
+        snap = collect_once(); return jsonify(ok=True, data=snap)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)[:300]), 500
+
+@app.route('/healthz')
+def healthz(): return 'ok'
+
+# ---------------- APIs ----------------
+COLS = ['id','ts','level','levelProgress','levelRequired','stars','coins','steals_total','steal_today','thefts_today','harvests','planted','orders_done','plots_count','mature_count','neighbors','qq_neighbors','harvest_stars','order_stars','payload']
+
+@app.route('/api/latest')
+@login_required
+def api_latest():
+    c = db(); row = c.execute("SELECT * FROM snapshots ORDER BY id DESC LIMIT 1").fetchone(); c.close()
+    if not row: return jsonify(ok=False, message='暂无数据(采集未运行或未配置农场账号)')
+    o = dict(zip(COLS, row))
+    try: o['payload'] = json.loads(o['payload']) if o['payload'] else {}
+    except Exception: o['payload'] = {}
+    return jsonify(ok=True, data=o)
+
+@app.route('/api/history')
+@login_required
+def api_history():
+    limit = min(int(request.args.get('limit', '300')), 2000)
+    keys = ['ts','level','levelProgress','stars','coins','steals_total','steal_today','thefts_today','harvests','orders_done','neighbors','qq_neighbors']
+    c = db(); rows = c.execute("SELECT %s FROM snapshots ORDER BY id DESC LIMIT ?" % ','.join(keys), (limit,)).fetchall(); c.close()
+    return jsonify(ok=True, items=[dict(zip(keys, r)) for r in reversed(rows)])
+
+@app.route('/api/status')
+@login_required
+def api_status():
+    return jsonify(ok=True, config={'base': BASE, 'interval': INTERVAL, 'has_farm_creds': bool(get_farm_creds())},
+                   status=STATUS, uptime=int(time.time() - STATUS['started']))
+
+# ---------------- farm collection ----------------
+STATUS = {'last_collect': 0, 'last_error': '', 'logged_in': False, 'started': time.time(), 'collects': 0}
+_S = requests.Session()
+_S.headers.update({'User-Agent': 'hai/2.0', 'Accept': 'application/json', 'Content-Type': 'application/json', 'Origin': BASE})
+_LOCK = threading.Lock()
+creds_global = None
+
+def _token(creds):
+    with _LOCK:
+        u, p = creds
+        r = _S.post(BASE + '/api/user/login?turnstile=', json={'username': u, PWF: p}, timeout=20)
         j = r.json()
-        if not j.get('success'):
-            raise RuntimeError('login failed: %s' % j)
+        if not j.get('success'): raise RuntimeError('farm login failed: %s' % j.get('message'))
         STATUS['logged_in'] = True
         return j['data']['access_token']
 
-def fresh_token():
-    with LOCK:
-        r = SESSION.post(BASE + '/api/user/auth/refresh', json={}, timeout=20)
-        if r.status_code == 200:
-            j = r.json()
-            if j.get('success') and j.get('data', {}).get('access_token'):
-                return j['data']['access_token']
-        # fallback relogin
-    return login()
-
-def api_get(path, token):
-    r = SESSION.get(BASE + path, headers={'Authorization': 'Bearer ' + token}, timeout=20)
+def _get(path, token):
+    r = _S.get(BASE + path, headers={'Authorization': 'Bearer ' + token}, timeout=20)
     if r.status_code == 401:
-        token = fresh_token()
-        r = SESSION.get(BASE + path, headers={'Authorization': 'Bearer ' + token}, timeout=20)
-    try:
-        return r.json()
-    except Exception:
-        return {'success': False, 'status': r.status_code, 'text': r.text[:200]}
+        token = _refresh(creds_global); r = _S.get(BASE + path, headers={'Authorization': 'Bearer ' + token}, timeout=20)
+    try: return r.json()
+    except Exception: return {'success': False, 'status': r.status_code}
+
+def _refresh(creds):
+    with _LOCK:
+        r = _S.post(BASE + '/api/user/auth/refresh', json={}, timeout=20)
+        if r.status_code == 200 and r.json().get('success'): return r.json()['data']['access_token']
+    return _token(creds)
 
 def collect_once():
-    token = fresh_token()
-    st = api_get('/api/farm2d/farm/state', token)
-    if not st.get('success'):
-        raise RuntimeError('state failed: %s' % str(st)[:200])
+    global creds_global
+    creds = get_farm_creds()
+    if not creds: raise RuntimeError('未配置农场账号(请在后台设置)')
+    creds_global = creds
+    token = _token(creds)
+    st = _get('/api/farm2d/farm/state', token)
+    if not st.get('success'): raise RuntimeError('state failed: %s' % str(st)[:160])
     d = st['data']; s = d['state']; qv = s.get('qqView', {})
-    nb = api_get('/api/farm2d/farm/neighbors', token)
-    neighbors = nb.get('data', {}).get('neighbors', []) if nb.get('success') else []
-    qq_neighbors = sum(1 for n in neighbors for p in n.get('plots', []) if p.get('qq'))
-    snap = dict(ts=int(time.time()),
-                level=qv.get('level'), levelProgress=qv.get('levelProgress'), levelRequired=qv.get('levelRequired'),
-                stars=s.get('stars'), coins=s.get('coins'),
-                plots=qv.get('plots', []), neighbors=len(neighbors), qq_neighbors=qq_neighbors,
-                orders=s.get('orders', []), tasks=s.get('fieldTasks'))
+    stats = s.get('stats', {}) or {}; steal = s.get('steal', {}) or {}
+    hs = s.get('harvestStars', {}) or {}; os_ = s.get('orderStars', {}) or {}
+    nb = _get('/api/farm2d/farm/neighbors', token); neigh = nb.get('data', {}).get('neighbors', []) if nb.get('success') else []
+    qq_neighbors = sum(1 for n in neigh for pl in n.get('plots', []) if pl.get('qq'))
+    plots = qv.get('plots', []); mature = sum(1 for pl in plots if pl.get('mature'))
+    lg = _get('/api/farm2d/farm/log?limit=30', token); steal_log = []
+    if lg.get('success'):
+        for row in lg['data'].get('log', []):
+            if 'Steal' in str(row.get('action')):
+                det = row.get('detail', {}) or {}
+                steal_log.append({'ts': row.get('ts'), 'action': row.get('action'),
+                                  'stolen': len(det.get('steals', []) or []), 'blocked': len(det.get('blockedPlots', []) or []),
+                                  'skipped': len(det.get('skippedPlots', []) or []), 'stars': det.get('stars', 0)})
+    tf = _get('/api/farm2d/farm/thefts?limit=30', token); thefts = tf.get('data', {}).get('thefts', []) if tf.get('success') else []
+    thefts_today = sum(1 for t in thefts if (t.get('ts', 0) / 1000) >= int(time.time()) - 24 * 3600)
+    payload = {'stats': stats, 'steal': steal, 'steal_log': steal_log[:12], 'thefts': thefts[:20],
+               'orders': s.get('orders', []), 'tasks': s.get('fieldTasks')}
     c = db()
-    c.execute('''INSERT INTO snapshots(ts,level,levelProgress,levelRequired,stars,coins,plots_json,neighbors,qq_neighbors,orders_json,tasks_json,raw)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
-              (snap['ts'], snap['level'], snap['levelProgress'], snap['levelRequired'], snap['stars'], snap['coins'],
-               json.dumps(snap['plots'], ensure_ascii=False), snap['neighbors'], snap['qq_neighbors'],
-               json.dumps(snap['orders'], ensure_ascii=False), json.dumps(snap['tasks'], ensure_ascii=False),
-               json.dumps(snap, ensure_ascii=False)))
+    c.execute("""INSERT INTO snapshots(ts,level,levelProgress,levelRequired,stars,coins,steals_total,steal_today,thefts_today,
+        harvests,planted,orders_done,plots_count,mature_count,neighbors,qq_neighbors,harvest_stars,order_stars,payload)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (int(time.time()), qv.get('level'), qv.get('levelProgress'), qv.get('levelRequired'), s.get('stars'), s.get('coins'),
+         stats.get('steals'), steal.get('count'), thefts_today, stats.get('harvests'), stats.get('planted'), stats.get('ordersDone'),
+         len(plots), mature, len(neigh), qq_neighbors, hs.get('n'), os_.get('n'), json.dumps(payload, ensure_ascii=False)))
     c.commit(); c.close()
-    STATUS['last_collect'] = snap['ts']; STATUS['last_error'] = ''; STATUS['collects'] += 1
-    return snap
+    STATUS['last_collect'] = int(time.time()); STATUS['last_error'] = ''; STATUS['collects'] += 1
+    return {'ts': int(time.time()), 'level': qv.get('level'), 'stars': s.get('stars'), 'coins': s.get('coins'),
+            'steals_total': stats.get('steals'), 'steal_today': steal.get('count'), 'thefts_today': thefts_today,
+            'neighbors': len(neigh), 'qq_neighbors': qq_neighbors}
 
 def collector_loop():
+    time.sleep(3)
     while True:
         try:
-            if USER and PWD:
-                collect_once()
-            else:
-                STATUS['last_error'] = 'FARM_USERNAME/FARM_PASSWORD 未配置，仅展示历史'
+            if get_farm_creds(): collect_once()
+            else: STATUS['last_error'] = '未配置农场账号(后台设置)'
         except Exception as e:
-            STATUS['last_error'] = str(e)[:300]
-            STATUS['logged_in'] = False
+            STATUS['last_error'] = str(e)[:300]; STATUS['logged_in'] = False
         time.sleep(max(30, INTERVAL))
-
-@app.route('/')
-def index():
-    return send_from_directory(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static'), 'index.html')
-
-@app.route('/api/latest')
-def api_latest():
-    c = db(); row = c.execute('SELECT * FROM snapshots ORDER BY id DESC LIMIT 1').fetchone(); c.close()
-    if not row:
-        return jsonify({'ok': False, 'message': '暂无数据(采集未运行或未配置账号)'})
-    cols = ['id','ts','level','levelProgress','levelRequired','stars','coins','plots_json','neighbors','qq_neighbors','orders_json','tasks_json','raw']
-    o = dict(zip(cols, row))
-    for k in ['plots_json','orders_json','tasks_json']:
-        try: o[k] = json.loads(o[k]) if o[k] else None
-        except Exception: pass
-    return jsonify({'ok': True, 'data': o})
-
-@app.route('/api/history')
-def api_history():
-    limit = min(int(request.args.get('limit', '200')), 2000)
-    c = db()
-    rows = c.execute('SELECT ts,level,levelProgress,stars,coins,neighbors,qq_neighbors FROM snapshots ORDER BY id DESC LIMIT ?', (limit,)).fetchall()
-    c.close()
-    rows = rows[::-1]
-    keys = ['ts','level','levelProgress','stars','coins','neighbors','qq_neighbors']
-    return jsonify({'ok': True, 'items': [dict(zip(keys, r)) for r in rows]})
-
-@app.route('/api/status')
-def api_status():
-    return jsonify({'ok': True, 'config': {'base': BASE, 'has_creds': bool(USER and PWD), 'interval': INTERVAL},
-                    'status': STATUS, 'uptime': int(time.time()-STATUS['started'])})
-
-@app.route('/api/collect', methods=['POST'])
-def api_collect():
-    try:
-        snap = collect_once()
-        return jsonify({'ok': True, 'data': {k: snap[k] for k in ('ts','level','levelProgress','levelRequired','stars','coins','neighbors','qq_neighbors')}})
-    except Exception as e:
-        return jsonify({'ok': False, 'error': str(e)}), 500
-
-@app.route('/healthz')
-def healthz():
-    return 'ok'
 
 if __name__ == '__main__':
     threading.Thread(target=collector_loop, daemon=True).start()

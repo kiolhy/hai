@@ -1,0 +1,35 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf" content="{{ csrf_token() }}">
+<title>hai · 后台管理</title>
+<style>body{margin:0;background:#0d1117;color:#e6edf3;font-family:system-ui,"Microsoft YaHei",sans-serif}header{padding:14px 22px;border-bottom:1px solid #21262d;display:flex;gap:14px;align-items:center}header a{color:#58a6ff;text-decoration:none;font-size:14px}.wrap{padding:20px 22px;display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:1000px}@media(max-width:800px){.wrap{grid-template-columns:1fr}}.panel{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px 18px}h2{font-size:14px;margin:0 0 12px}label{display:block;font-size:12px;color:#8b949e;margin:8px 0 4px}input{width:100%;box-sizing:border-box;padding:9px 11px;border-radius:8px;border:1px solid #30363d;background:#0d1117;color:#e6edf3}button{margin-top:12px;padding:9px 14px;border:0;border-radius:8px;background:#238636;color:#fff;font-weight:600;cursor:pointer}.mut{color:#8b949e;font-size:12px}.ok{color:#3fb950}.err{color:#f85149}</style></head>
+<body><header><strong>🌾 hai 后台</strong><a href="/">← 返回看板</a><form method="post" action="/logout" style="margin-left:auto"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button style="background:#30363d;padding:6px 10px;margin:0">退出</button></form></header>
+<div class="wrap">
+  <div class="panel"><h2>🔑 修改访问密码</h2>
+    <form id="pwf"><label>旧密码</label><input type="{{ ptype }}" name="old" required>
+      <label>新密码(≥8位)</label><input type="{{ ptype }}" name="new" required>
+      <label>确认新密码</label><input type="{{ ptype }}" name="new2" required>
+      <button type="submit">保存新密码</button></form>
+    <div class="mut" id="pwmsg"></div></div>
+  <div class="panel"><h2>🚜 农场账号（登录后采集用，加密存储）</h2>
+     <div class="mut">当前：{{ '已配置，更新时间 ' + (farm_updated|string) if has_cred else '未配置' }}</div>
+    <form id="farmf"><label>账号用户名</label><input name="user" autocomplete="off" required>
+      <label>账号密码</label><input type="{{ ptype }}" name="pass" required>
+      <button type="submit">保存农场账号</button></form>
+    <div class="mut" id="farmmsg"></div></div>
+  <div class="panel"><h2>📡 采集</h2>
+    <button id="collect">立即采集一次</button>
+    <div class="mut" id="colmsg"></div>
+    <div class="mut" id="st" style="margin-top:8px"></div></div>
+  <div class="panel"><h2>ℹ️ 说明</h2><div class="mut">· 访问密码以 PBKDF2 哈希存储；农场账号 Fernet 加密存储。<br>· 所有 POST 校验 CSRF；登录失败限流。<br>· 数据看板：<a href="/" style="color:#58a6ff">返回首页</a></div></div>
+</div>
+<script>
+const CSRF=document.querySelector('meta[name=csrf]').content;
+async function post(form){const fd=new FormData(form);fd.set('csrf',CSRF);const r=await fetch(form.action,{method:'POST',body:fd,headers:{'X-CSRF':CSRF}});return r.json().catch(()=>({ok:false,error:'HTTP '+r.status}))}
+document.getElementById('pwf').action='/admin/password';
+document.getElementById('pwf').addEventListener('submit',async e=>{e.preventDefault();const j=await post(e.target);const m=document.getElementById('pwmsg');m.className=j.ok?'ok':'err';m.textContent=j.ok?'已修改，请用新密码重新登录':(j.error||'失败');if(j.ok)setTimeout(()=>location.href='/login',1200)});
+document.getElementById('farmf').action='/admin/farm';
+document.getElementById('farmf').addEventListener('submit',async e=>{e.preventDefault();const j=await post(e.target);const m=document.getElementById('farmmsg');m.className=j.ok?'ok':'err';m.textContent=j.ok?j.msg:(j.error||'失败')});
+document.getElementById('collect').addEventListener('click',async()=>{const r=await fetch('/admin/collect',{method:'POST',headers:{'X-CSRF':CSRF}});const j=await r.json();document.getElementById('colmsg').textContent=j.ok?('采集成功 '+JSON.stringify(j.data)):('失败 '+ (j.error||r.status))});
+async function st(){try{const j=await (await fetch('/api/status')).json();document.getElementById('st').textContent='采集次数 '+j.status.collects+' · 最近错误 '+(j.status.last_error||'无')+' · 农场凭据 '+(j.config.has_farm_creds?'已配':'未配')}catch(e){}}
+st();setInterval(st,10000);
+</script></body></html>
