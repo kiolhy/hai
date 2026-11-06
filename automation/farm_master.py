@@ -224,11 +224,59 @@ def ws_listener():
                 attempt=min(attempt+1,6); d=min(60,5*(2**attempt))
                 log('[ws] err '+str(e)[:70]+(' | retry %ds'%d));time.sleep(d)
     threading.Thread(target=run,daemon=True).start()
+PROBE_CUR=[0]; PROBE={'ts':0,'attempts':0,'confirmed':False,'last':None}
+def _write_probe():
+    try: open(os.path.join(OUT,'round_probe.json'),'w',encoding='utf-8').write(json.dumps(PROBE,ensure_ascii=False))
+    except Exception: pass
+    try:
+        if PROBE.get('last'): open(os.path.join(OUT,'round_probe.jsonl'),'a',encoding='utf-8').write(json.dumps(PROBE['last'],ensure_ascii=False)+'\n')
+    except Exception: pass
+def round_probe_once():
+    ids=[]; i=PROBE_CUR[0]
+    for _ in range(60):
+        if i>=len(SCAN_IDS): i=0
+        ids.append(SCAN_IDS[i]); i+=1
+    PROBE_CUR[0]=i
+    tok=token(); found=[]
+    for uid in ids:
+        st,g,_=http('GET',ROOT+f'/api/farm2d/farm/qq/garden?owner={uid}',token=tok)
+        if st==200 and isinstance(g,dict) and g.get('success'):
+            data=g.get('data') or {}
+            for p in (data.get('plots') or []):
+                if p.get('canSteal'):
+                    found.append({'victim':uid,'plot':p.get('i'),'round':p.get('round'),'open':data.get('gardenOpen')}); break
+        if found: break
+    PROBE['ts']=int(time.time())
+    if not found:
+        PROBE['last']={'ts':int(time.time()),'result':'no_ripe_target'}; _write_probe(); log('[probe] no ripe target in batch'); return
+    t=found[0]
+    ok,msg=act('qqStealAll',{'targets':[{'victim':t['victim'],'plot':t['plot'],'round':1}]},'direct')
+    bypass=False
+    try:
+        det=json.loads(msg) if isinstance(msg,str) and msg.strip().startswith('{') else {}
+        bypass=bool(det.get('steals'))
+    except Exception: pass
+    PROBE['attempts']=PROBE.get('attempts',0)+1
+    PROBE['last']={'ts':int(time.time()),'target':t,'forged_round':1,'ok':ok,'msg':str(msg)[:200],'bypass':bypass}
+    if bypass:
+        PROBE['confirmed']=True; log('[probe] BYPASS CONFIRMED victim=%s plot=%s'%(t['victim'],t['plot']))
+    else:
+        log('[probe] forged round failed: '+str(msg)[:100])
+        try: act('qqStealAll',{'targets':[{'victim':t['victim'],'plot':t['plot'],'round':t.get('round')}]},'direct')
+        except Exception: pass
+    _write_probe()
+def probe_loop():
+    time.sleep(20)
+    while True:
+        try: round_probe_once()
+        except Exception as e: log('[probe] err '+str(e)[:80])
+        time.sleep(40)
 def main(duration=7200):
     open(LOG,'w',encoding='utf-8').close()
     if not refresh(): log('auth fail'); return
     log(f'START scan_pool={len(SCAN_IDS)}')
     threading.Thread(target=ws_listener,daemon=True).start()
+    threading.Thread(target=probe_loop,daemon=True).start()
     spend()
     stop=threading.Event()
     th=threading.Thread(target=steal_loop,args=(stop,duration),daemon=True); th.start()
