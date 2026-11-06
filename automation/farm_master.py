@@ -159,10 +159,60 @@ def steal_loop(stop, duration):
         except Exception as e:
             log('steal err '+str(e)[:80])
         time.sleep(6)
+# ---- WebSocket 实时动态监听（接入唯一会话，捕获 /farm/live 所有推送）----
+WS={'connected':False,'since':int(time.time()),'last_ts':0,'counts':{},'recent':[],'latest':{}}
+WSLOCK=threading.Lock()
+def _extract(d):
+    try:
+        st=d['state'];qv=st.get('qqView',{});s1=st.get('stats',{}) or {};sl=st.get('steal',{}) or {}
+        return {'level':qv.get('level'),'levelProgress':qv.get('levelProgress'),'stars':st.get('stars'),'coins':st.get('coins'),'steals_total':s1.get('steals'),'steal_today':sl.get('count')}
+    except Exception: return {}
+def _summ(t,m):
+    d=m.get('data')
+    try:
+        if t=='reply':
+            b=m.get('body') or {};return ('ok' if b.get('success') else ('fail '+(str(b.get('code')) if isinstance(b,dict) else '')))
+        if t in ('snapshot','patch') and isinstance(d,dict): return 'v=%s'%d.get('version')
+        if t=='neighbors' and isinstance(d,dict): return 'neighbors=%d'%len(d.get('neighbors',[]) or [])
+        if t=='balance': return 'balance'
+    except Exception: pass
+    return ''
+def _ws_on_frame(m):
+    t=m.get('type');d=m.get('data')
+    with WSLOCK:
+        WS['connected']=True;WS['last_ts']=int(time.time())
+        WS['counts'][t]=WS['counts'].get(t,0)+1
+        if isinstance(d,dict) and isinstance(d.get('state'),dict):
+            try:_live_dump(d);WS['latest']=_extract(d)
+            except Exception:pass
+        ev={'ts':int(time.time()),'type':t,'sum':_summ(t,m)}
+        WS['recent'].append(ev);WS['recent']=WS['recent'][-60:]
+        try:open(os.path.join(OUT,'ws_status.json'),'w',encoding='utf-8').write(json.dumps(WS,ensure_ascii=False))
+        except Exception:pass
+        try:open(os.path.join(OUT,'ws_events.jsonl'),'a',encoding='utf-8').write(json.dumps(ev,ensure_ascii=False)+'\n')
+        except Exception:pass
+def ws_listener():
+    import asyncio,websockets
+    async def one():
+        tok=token();ck=open(CKF,encoding='utf-8').read().strip()
+        hdr={'Origin':ROOT,'User-Agent':UA,'Cookie':CK+'='+ck}
+        async with websockets.connect('wss://www.0809.one/api/farm2d/farm/live',max_size=2**22,open_timeout=15,additional_headers=hdr) as ws:
+            await ws.send(json.dumps({'type':'auth','token':tok,'expectExisting':True}))
+            log('[ws] connected')
+            while True:
+                m=json.loads(await asyncio.wait_for(ws.recv(),timeout=90));_ws_on_frame(m)
+    def run():
+        while True:
+            try:asyncio.run(one())
+            except Exception as e:
+                with WSLOCK:WS['connected']=False
+                log('[ws] err '+str(e)[:80]);time.sleep(8)
+    threading.Thread(target=run,daemon=True).start()
 def main(duration=7200):
     open(LOG,'w',encoding='utf-8').close()
     if not refresh(): log('auth fail'); return
     log(f'START scan_pool={len(SCAN_IDS)}')
+    threading.Thread(target=ws_listener,daemon=True).start()
     spend()
     stop=threading.Event()
     th=threading.Thread(target=steal_loop,args=(stop,duration),daemon=True); th.start()

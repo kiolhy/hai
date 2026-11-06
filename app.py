@@ -250,6 +250,24 @@ def api_scripts(): return jsonify(ok=True, scripts=scripts_snapshot(), log_dir=S
 @login_required
 def scripts_page(): return render_template('scripts.html')
 
+def _ws_status_path():
+    fl = os.environ.get('FARM_LIVE_JSON')
+    d = os.path.dirname(fl) if fl else SCRIPTS_LOG_DIR
+    return os.environ.get('WS_STATUS_JSON') or os.path.join(d, 'ws_status.json')
+
+@app.route('/api/live')
+@login_required
+def api_live():
+    p = _ws_status_path()
+    if os.path.exists(p):
+        try: return jsonify(ok=True, data=json.load(open(p, encoding='utf-8')))
+        except Exception as e: return jsonify(ok=False, error=str(e))
+    return jsonify(ok=False, message='WS 实时动态未就绪(ws_status.json 不存在)')
+
+@app.route('/live')
+@login_required
+def live_page(): return render_template('live.html')
+
 @app.route('/admin/script/<op>/<name>', methods=['POST'])
 @login_required
 def admin_script(op, name):

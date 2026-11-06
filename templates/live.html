@@ -1,0 +1,34 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf" content="{{ csrf_token() }}">
+<title>hai · 实时动态</title>
+<style>body{margin:0;background:#0d1117;color:#e6edf3;font-family:system-ui,"Microsoft YaHei",sans-serif}header{padding:14px 22px;border-bottom:1px solid #21262d;display:flex;gap:14px;align-items:center}header a,header .lnk{color:#58a6ff;text-decoration:none;font-size:13px;cursor:pointer}header h1{font-size:16px;margin:0}.wrap{padding:16px 22px}.mut{color:#8b949e;font-size:12px}.ok{color:#3fb950}.err{color:#f85149}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin:8px 0 14px}.card{background:#161b22;border:1px solid #21262d;border-radius:10px;padding:10px 12px}.card .k{color:#8b949e;font-size:11px}.card .v{font-size:20px;font-weight:700;margin-top:2px}.grid{display:grid;grid-template-columns:1.3fr 1fr;gap:14px}@media(max-width:900px){.grid{grid-template-columns:1fr}}.panel{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:12px 14px}.panel h2{font-size:13px;margin:0 0 8px}.feed{max-height:60vh;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.7}.feed .row{border-bottom:1px solid #21262d;padding:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.t{color:#58a6ff}.tc{display:inline-block;min-width:82px}.badge{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;background:#30363d;color:#c9d1d9;margin-right:4px}
+</style></head>
+<body><header><h1>📡 实时动态</h1><a href="/">← 看板</a><a href="/scripts">📜 脚本监控</a><a href="/admin">⚙ 后台</a>
+<form method="post" action="/logout" style="margin-left:auto"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button class="lnk" style="background:none;border:0;color:#58a6ff">退出</button></form></header>
+<div class="wrap">
+ <div class="mut" id="conn" style="margin-bottom:8px">加载中…</div>
+ <div class="cards" id="cards"></div>
+ <div class="grid">
+   <div class="panel"><h2>实时帧流（/farm/live 推送，最新在上）</h2><div class="feed" id="feed"></div></div>
+   <div class="panel"><h2>帧类型统计</h2><div id="counts" class="mut"></div><div class="mut" id="note" style="margin-top:10px;line-height:1.7">· 由常驻 `farm_master` 通过 WebSocket `/farm/live` 实时接收并落盘（snapshot/patch/neighbors/balance/reply…），本页每 2s 刷新。<br>· 与 REST 共用同一会话，不额外登录。</div></div>
+ </div>
+</div>
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+async function load(){
+  const r=await (await fetch('/api/live')).json();
+  const c=document.getElementById('conn');
+  if(!r.ok){c.innerHTML='<span class="err">● 未就绪</span> '+(r.message||'');return;}
+  const d=r.data||{};
+  c.innerHTML=(d.connected?'<span class="ok"><span class="dot" style="background:#3fb950"></span>已连接</span>':'<span class="err"><span class="dot" style="background:#f85149"></span>未连接</span>')
+     + ' · 最近帧 '+(d.last_ts?new Date(d.last_ts*1000).toLocaleTimeString():'-')+' · 连接于 '+(d.since?new Date(d.since*1000).toLocaleTimeString():'-');
+  const L=d.latest||{};
+  document.getElementById('cards').innerHTML=
+    [['等级/经验',(L.level??'-')+' / '+(L.levelProgress??'-')],['钻石',L.stars??'-'],['金币',(L.coins??0).toLocaleString()],['累计偷菜',L.steals_total??'-'],['今日偷菜',L.steal_today??'-']]
+    .map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  const cnt=d.counts||{}; document.getElementById('counts').innerHTML=Object.keys(cnt).sort().map(k=>`<span class="badge">${esc(k)}: ${cnt[k]}</span>`).join('')||'（暂无）';
+  const rc=(d.recent||[]).slice().reverse();
+  document.getElementById('feed').innerHTML=rc.map(e=>`<div class="row"><span class="mut">${new Date(e.ts*1000).toLocaleTimeString()}</span> <span class="t tc">${esc(e.type)}</span> ${esc(e.sum||'')}</div>`).join('')||'<div class="mut">（暂无帧）</div>';
+}
+load();setInterval(load,2000);
+</script></body></html>
